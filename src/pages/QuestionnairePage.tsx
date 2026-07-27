@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { CheckCircle2, AlertCircle, ArrowRight } from "lucide-react";
 import { BFI44_QUESTIONS } from "../data/bfi44";
-
+import { apiFetch } from "../lib/api";
 interface QuestionnairePageProps {
   user: { user_id: string; email: string };
 }
@@ -18,7 +18,7 @@ export function QuestionnairePage({ user }: QuestionnairePageProps) {
     const fetchExisting = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`/api/questionnaire/response?user_id=${user.user_id}`);
+        const res = await apiFetch(`/api/questionnaire/response?user_id=${user.user_id}`);
         if (res.ok) {
           const json = await res.json();
           if (json.data && Array.isArray(json.data.responses)) {
@@ -74,9 +74,9 @@ export function QuestionnairePage({ user }: QuestionnairePageProps) {
         score: answers[q.id],
       }));
 
-      const res = await fetch("/questionnaire/submit", {
+      const res = await apiFetch("/questionnaire/submit", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        
         body: JSON.stringify({
           user_id: user.user_id,
           questionnaire_type: "BFI-44",

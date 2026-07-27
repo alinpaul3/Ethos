@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Chrome, Copy, Check, Link as LinkIcon, AlertCircle, Download, ExternalLink, ArrowRight, Sparkles, CheckCircle2, ShieldCheck, Zap, Radio, Layers, Server, RefreshCw, HelpCircle, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-
+import { apiFetch } from "../lib/api";
 interface ExtensionConnectPageProps {
   user: { user_id: string; email: string };
 }
@@ -20,7 +20,7 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
   useEffect(() => {
     const checkConsentAndStatus = async () => {
       try {
-        const res = await fetch(`/api/consent-status?user_id=${user.user_id}`);
+        const res = await apiFetch(`/api/consent-status?user_id=${user.user_id}`);
         if (res.ok) {
           const contentType = res.headers.get("content-type");
           if (contentType && contentType.includes("application/json")) {
@@ -30,7 +30,7 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
         }
 
         // Check recent telemetry events to verify if data is actively collecting
-        const dashboardRes = await fetch(`/api/dashboard-data?user_id=${user.user_id}`);
+        const dashboardRes = await apiFetch(`/api/dashboard-data?user_id=${user.user_id}`);
         if (dashboardRes.ok) {
           const contentType = dashboardRes.headers.get("content-type");
           if (contentType && contentType.includes("application/json")) {

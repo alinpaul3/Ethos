@@ -2,7 +2,7 @@ import { useState, FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { UserPlus, ArrowRight } from "lucide-react";
 import { motion } from "motion/react";
-
+import { apiFetch } from "../lib/api";
 interface SignupPageProps {
   onAuth: (user: any) => void;
 }
@@ -21,9 +21,9 @@ export function SignupPage({ onAuth }: SignupPageProps) {
       return;
     }
     try {
-      const res = await fetch("/api/auth/signup", {
+      const res = await apiFetch("/api/auth/signup", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        
         body: JSON.stringify({ email, password }),
       });
       

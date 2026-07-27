@@ -7,7 +7,7 @@ import { ExtensionConnectPage } from "./pages/ExtensionConnectPage";
 import { QuestionnairePage } from "./pages/QuestionnairePage";
 import { Dashboard } from "./pages/Dashboard";
 import { Layout } from "./components/Layout";
-
+import { apiFetch } from "./lib/api";
 interface User {
   user_id: string;
   email: string;
@@ -21,14 +21,14 @@ export default function App() {
   useEffect(() => {
     const checkAuthAndConsent = async () => {
       try {
-        const authRes = await fetch("/api/auth/me");
+        const authRes = await apiFetch("/api/auth/me");
         const contentType = authRes.headers.get("content-type");
         
         if (authRes.ok && contentType && contentType.includes("application/json")) {
           const userData = await authRes.json();
           setUser(userData);
           
-          const consentRes = await fetch(`/api/consent-status?user_id=${userData.user_id}`);
+          const consentRes = await apiFetch(`/api/consent-status?user_id=${userData.user_id}`);
           const consentContentType = consentRes.headers.get("content-type");
           if (consentRes.ok && consentContentType && consentContentType.includes("application/json")) {
             const consentData = await consentRes.json();

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, X } from "lucide-react";
 import { motion } from "motion/react";
-
+import { apiFetch } from "../lib/api";
 interface ConsentPageProps {
   user: { user_id: string; email: string };
   onConsentChange?: (given: boolean) => void;
@@ -16,7 +16,7 @@ export function ConsentPage({ user, onConsentChange }: ConsentPageProps) {
   useEffect(() => {
     const checkConsent = async () => {
       try {
-        const res = await fetch(`/api/consent-status?user_id=${user.user_id}`);
+        const res = await apifetch(`/api/consent-status?user_id=${user.user_id}`);
         if (res.ok) {
           const contentType = res.headers.get("content-type");
           if (contentType && contentType.includes("application/json")) {
@@ -35,9 +35,9 @@ export function ConsentPage({ user, onConsentChange }: ConsentPageProps) {
 
   const handleConsent = async (given: boolean) => {
     try {
-      const res = await fetch("/api/consent", {
+      const res = await apifetch("/api/consent", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        
         body: JSON.stringify({ user_id: user.user_id, consent_given: given }),
       });
       

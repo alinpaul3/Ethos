@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Activity, Clock, Database, Info, RefreshCw, Compass, Shield, Award, Brain, Tag, ChevronDown, ChevronUp, Play, Sparkles, Zap, Download, Layers, ArrowUpRight, BarChart3, Radio, CheckCircle2, Cpu, FileText, ShieldCheck, Chrome, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
-
+import { apiFetch } from "../lib/api";
 interface DashboardProps {
   user: { user_id: string; email: string };
 }
@@ -29,7 +29,7 @@ export function Dashboard({ user }: DashboardProps) {
     else setRefreshing(true);
     
     try {
-      const res = await fetch(`/api/dashboard-data?user_id=${user.user_id}`);
+      const res = await apiFetch(`/api/dashboard-data?user_id=${user.user_id}`);
       const contentType = res.headers.get("content-type");
       
       if (!res.ok) {
@@ -75,9 +75,9 @@ export function Dashboard({ user }: DashboardProps) {
       const startTime = new Date(Date.now() - 600000).toISOString();
       const endTime = new Date().toISOString();
 
-      const res = await fetch("/events", {
+      const res = await apiFetch("/events", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        
         body: JSON.stringify({
           user_id: user.user_id,
           platform: "youtube",
@@ -691,7 +691,7 @@ export function Dashboard({ user }: DashboardProps) {
                 onClick={async () => {
                   try {
                     triggerToast("⚡ Initiating Keras ML Model Pipeline...");
-                    const res = await fetch("/api/ml/train", { method: "POST" });
+                    const res = await apiFetch("/api/ml/train", { method: "POST" });
                     const json = await res.json();
                     if (json.status === "success") {
                       triggerToast("✓ Model Trained Successfully! Saved to /ml");
