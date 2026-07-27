@@ -16,7 +16,7 @@ export function ConsentPage({ user, onConsentChange }: ConsentPageProps) {
   useEffect(() => {
     const checkConsent = async () => {
       try {
-        const res = await apifetch(`/api/consent-status?user_id=${user.user_id}`);
+        const res = await apiFetch(`/api/consent-status?user_id=${user.user_id}`);
         if (res.ok) {
           const contentType = res.headers.get("content-type");
           if (contentType && contentType.includes("application/json")) {
@@ -35,7 +35,7 @@ export function ConsentPage({ user, onConsentChange }: ConsentPageProps) {
 
   const handleConsent = async (given: boolean) => {
     try {
-      const res = await apifetch("/api/consent", {
+      const res = await apiFetch("/api/consent", {
         method: "POST",
         
         body: JSON.stringify({ user_id: user.user_id, consent_given: given }),

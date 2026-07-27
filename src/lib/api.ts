@@ -11,10 +11,10 @@ export const API_BASE_URL = RAW_BASE_URL.endsWith('/') ? RAW_BASE_URL.slice(0, -
  */
 export async function apiFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const url = `${API_BASE_URL}${normalizedEndpoint}`;
+  const url = API_BASE_URL ? `${API_BASE_URL}${normalizedEndpoint}` : normalizedEndpoint;
 
   const headers = new Headers(options.headers || {});
-  if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
+  if (options.body && !headers.has('Content-Type') && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -24,7 +24,15 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     headers,
   };
 
-  return fetch(url, config);
+ try {
+    return await fetch(url, config);
+  } catch (err) {
+    if (API_BASE_URL && url !== normalizedEndpoint) {
+      console.warn(`apiFetch failed for ${url}, falling back to relative path ${normalizedEndpoint}`, err);
+      return await fetch(normalizedEndpoint, config);
+    }
+    throw err;
+  }
 }
 
 export default apiFetch;

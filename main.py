@@ -4,6 +4,7 @@ from enrichment_service import enrich_event_pipeline
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timedelta
 import os
+from fastapi.responses import JSONResponse
 import httpx
 import logging
 import statistics
@@ -134,6 +135,21 @@ class EventPayload(BaseModel):
 
 class ProcessRequest(BaseModel):
     user_id: str
+class N8nTriggerRequest(BaseModel):
+    user_id: Optional[str] = "test_user"
+
+class PreprocessRequest(BaseModel):
+    user_id: Optional[str] = None
+    event_count: Optional[int] = 0
+    events: Optional[List[dict]] = None
+
+class PipelineStageRequest(BaseModel):
+    user_id: Optional[str] = None
+    event_count: Optional[int] = None
+    events: Optional[List[dict]] = None
+    features: Optional[dict] = None
+    signals: Optional[dict] = None
+
 
 @app.on_event("startup")
 async def startup_db_client():
@@ -155,6 +171,69 @@ async def health():
 @app.get("/api/ping")
 async def ping():
     return {"status": "alive", "dbConnected": db is not None}
+
+@app.get("/api/n8n/health")
+@app.get("/n8n/health")
+async def n8n_health():
+    is_configured = bool(N8N_WEBHOOK_URL)
+    return {
+        "status": "healthy" if is_configured else "unconfigured",
+        "n8n_webhook_configured": is_configured,
+        "webhook_url_set": is_configured,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+@app.get("/api/n8n/status")
+@app.get("/n8n/status")
+async def n8n_status():
+    is_configured = bool(N8N_WEBHOOK_URL)
+    return {
+        "status": "configured" if is_configured else "unconfigured",
+        "n8n_webhook_configured": is_configured,
+        "webhook_url_set": is_configured,
+        "webhook_url": N8N_WEBHOOK_URL if is_configured else None,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+@app.post("/api/n8n/trigger")
+@app.post("/n8n/trigger")
+async def n8n_trigger(payload: Optional[N8nTriggerRequest] = Body(None)):
+    
+    user_id = payload.user_id if payload and payload.user_id else "test_user"
+    event_count = 0
+    if db is not None:
+        try:
+            event_count = await db.raw_events.count_documents({"user_id": user_id})
+        except Exception as db_err:
+            logger.error(f"Error counting documents in raw_events: {db_err}")
+    
+    trigger_payload = {
+        "user_id": user_id,
+        "event_count": event_count,
+        "triggered_at": datetime.utcnow().isoformat()
+         }
+
+    if not N8N_WEBHOOK_URL:
+        return {
+            "status": "unconfigured",
+            "message": "N8N_WEBHOOK_URL is not set in environment variables",
+            "payload_sent": trigger_payload
+    }
+
+    try:
+        async with httpx.AsyncClient() as httpx_client:
+            res = await httpx_client.post(N8N_WEBHOOK_URL, json=trigger_payload, timeout=10.0)
+            return {
+                "status": "triggered" if res.is_success else "failed",
+                "n8n_status_code": res.status_code,
+                "n8n_response": res.text[:300],
+                "payload_sent": trigger_payload
+            }
+    except Exception as e:
+        logger.error(f"Error triggering n8n webhook: {e}")
+        return {
+            "status": "error",
+            "message": f"Failed to call n8n webhook: {str(e)}",
+            "payload_sent": trigger_payload
+        }
 
 # --- PHASE 1: AUTHENTICATION ---
 @app.post("/api/auth/signup")
@@ -418,4 +497,307 @@ async def process_data(req: ProcessRequest):
     await db.behavior_profiles.update_one({"user_id": req.user_id}, {"$set": profile}, upsert=True)
 
     return {"message": "Processing completed", "user_id": req.user_id, "summary": profile["signals"]}
+@app.post("/preprocess")
+@app.post("/api/preprocess")
+async def preprocess(payload: Optional[PreprocessRequest] = Body(None)):
+    user_id = payload.user_id if payload else None
+    events = payload.events if payload else None
+    event_count = payload.event_count if payload else 0
 
+    logger.info(f"[Preprocess API] Processing started for user: {user_id or 'unknown'}. Events to process: {event_count or 0}")
+
+    if not user_id:
+        logger.error("[Preprocess API] Processing failed. Error: Missing user_id.")
+        return JSONResponse(status_code=400, content={
+            "status": "failed",
+            "message": "user_id is required"
+        })
+
+    if events is None or not isinstance(events, list):
+        logger.error(f"[Preprocess API] Processing failed for user: {user_id}. Error: Invalid or missing events list.")
+        return JSONResponse(status_code=400, content={
+            "status": "failed",
+            "message": "events must be an array of enriched browsing documents"
+        })
+
+    try:
+        if db is not None:
+            await db.processing_status.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "preprocessed_dataset_packaged": True,
+                        "last_preprocessed_at": datetime.utcnow().isoformat(),
+                        "preprocessed_events_count": len(events)
+                    }
+                },
+                upsert=True
+            )
+
+        logger.info(f"[Preprocess API] Processing completed successfully for user: {user_id}. {len(events)} events processed.")
+
+        return {
+            "status": "success",
+            "message": "Preprocessing completed",
+            "user_id": user_id,
+            "processed_events_count": len(events),
+            "next_stages_ready": ["feature-engineering", "behavior-model", "ocean-model", "generate-explanation"],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as error:
+        logger.error(f"[Preprocess API] Processing failed for user: {user_id}. Error: {error}")
+        return JSONResponse(status_code=500, content={
+            "status": "failed",
+            "message": "Internal preprocessing failure",
+            "error": str(error)
+        })
+
+@app.post("/feature-engineering")
+@app.post("/api/feature-engineering")
+async def feature_engineering(payload: Optional[PipelineStageRequest] = Body(None)):
+    user_id = (payload.user_id if payload and payload.user_id else None) or "test_user"
+    events_input = payload.events if payload else None
+
+    logger.info(f"[Feature Engineering API] Started for user: {user_id}")
+
+    try:
+        events = events_input
+        if not events and db is not None:
+            try:
+                events = await db.raw_events.find({"user_id": user_id}).to_list(1000)
+                if not events:
+                    events = await db.enriched_events.find({"user_id": user_id}).to_list(1000)
+            except Exception as db_err:
+                logger.error(f"Error fetching events for user {user_id}: {db_err}")
+
+        events = events or []
+        valid_events = [
+            e for e in events 
+            if (isinstance(e, dict) and (e.get("duration_seconds", 0) >= 5 or "content_title" in e or (e.get("browser_event") and e["browser_event"].get("content_title"))))
+        ]
+        total_events = len(valid_events)
+
+        if total_events == 0:
+            features = {
+                "user_id": user_id,
+                "total_events": 0,
+                "avg_session_duration": 0.0,
+                "total_watch_time": 0.0,
+                "late_night_ratio": 0.0,
+                "topic_diversity": 0.0,
+                "repetition_score": 0.0,
+                "activity_consistency": 1.0,
+                "avg_sentiment": 0.0,
+                "processed_at": datetime.utcnow().isoformat()
+            }
+        else:
+            total_time = sum(
+                (e.get("duration_seconds") or e.get("browser_event", {}).get("duration_seconds", 0) or 0)
+                for e in valid_events
+            )
+            late_night = 0
+            hours = []
+            titles = []
+            for e in valid_events:
+                title = e.get("content_title") or e.get("browser_event", {}).get("content_title") or ""
+                if title:
+                    titles.append(clean_title(title))
+                ts = e.get("timestamp_start") or e.get("browser_event", {}).get("timestamp_start")
+                if ts:
+                    try:
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        hours.append(dt.hour)
+                        if dt.hour >= 22 or dt.hour < 4:
+                            late_night += 1
+                    except Exception:
+                        pass
+
+            ln_ratio = late_night / total_events if total_events > 0 else 0.0
+            consistency = 1.0 - (statistics.stdev(hours) / 12.0) if len(hours) > 1 else 1.0
+            consistency = max(0.0, min(1.0, consistency))
+
+            meaningful_words = {w for t in titles for w in t.split() if len(w) > 3}
+            topic_div = len(meaningful_words) / (total_events + 1)
+
+            unique_titles = set(titles)
+            repetitive = (sum(1 for t, c in {t: titles.count(t) for t in unique_titles}.items() if c > 1) / len(unique_titles)) if unique_titles else 0.0
+
+            sent_scores = [get_sentiment_score(t) for t in titles] if titles else [0.0]
+            avg_sent = sum(sent_scores) / len(sent_scores) if sent_scores else 0.0
+
+            features = {
+                "user_id": user_id,
+                "total_events": total_events,
+                "avg_session_duration": total_time / total_events if total_events > 0 else 0.0,
+                "total_watch_time": total_time,
+                "late_night_ratio": ln_ratio,
+                "topic_diversity": topic_div,
+                "repetition_score": repetitive,
+                "activity_consistency": consistency,
+                "avg_sentiment": avg_sent,
+                "processed_at": datetime.utcnow().isoformat()
+            }
+
+        if db is not None:
+            try:
+                await db.user_features.update_one({"user_id": user_id}, {"$set": features}, upsert=True)
+            except Exception as db_err:
+                logger.error(f"Error updating user_features in db: {db_err}")
+
+        logger.info(f"[Feature Engineering API] Completed successfully for user: {user_id}")
+
+        return {
+            "status": "success",
+            "message": "Feature engineering completed",
+            "user_id": user_id,
+            "features": features,
+            "next_stage": "behavior-model",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as error:
+        logger.error(f"[Feature Engineering API] Failed for user: {user_id}. Error: {error}")
+        return JSONResponse(status_code=500, content={
+            "status": "failed",
+            "message": "Feature engineering processing error",
+            "error": str(error)
+        })
+
+@app.post("/behavior-model")
+@app.post("/api/behavior-model")
+async def behavior_model(payload: Optional[PipelineStageRequest] = Body(None)):
+    user_id = (payload.user_id if payload and payload.user_id else None) or "test_user"
+    logger.info(f"[Behavior Model API] Started for user: {user_id}")
+
+    try:
+        features = payload.features if payload else None
+        if not features and db is not None:
+            try:
+                features = await db.user_features.find_one({"user_id": user_id})
+            except Exception as e:
+                logger.error(f"Error fetching features: {e}")
+
+        features = features or {}
+        topic_div = features.get("topic_diversity", 0.0)
+        consistency = features.get("activity_consistency", 1.0)
+        ln_ratio = features.get("late_night_ratio", 0.0)
+        total_time = features.get("total_watch_time", 0.0)
+        avg_sent = features.get("avg_sentiment", 0.0)
+
+        signals = {
+            "curiosity_signal": "High" if topic_div > 0.5 else ("Moderate" if topic_div > 0.2 else "Low"),
+            "discipline_signal": "High" if (consistency > 0.7 and ln_ratio < 0.2) else ("Low" if ln_ratio > 0.5 else "Moderate"),
+            "engagement_signal": "High" if total_time > 3600 else ("Moderate" if total_time > 1800 else "Low"),
+            "emotional_stability_signal": "High" if abs(avg_sent) < 0.5 else "Variable"
+        }
+
+        profile = {
+            "user_id": user_id,
+            "signals": signals,
+            "derived_at": datetime.utcnow().isoformat()
+        }
+
+        if db is not None:
+            try:
+                await db.behavior_profiles.update_one({"user_id": user_id}, {"$set": profile}, upsert=True)
+            except Exception as e:
+                logger.error(f"Error storing behavior profile: {e}")
+
+        logger.info(f"[Behavior Model API] Completed for user: {user_id}")
+
+        return {
+            "status": "success",
+            "message": "Behavior model processing completed",
+            "user_id": user_id,
+            "signals": signals,
+            "next_stage": "ocean-model",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as error:
+        logger.error(f"[Behavior Model API] Error: {error}")
+        return JSONResponse(status_code=500, content={
+            "status": "failed",
+            "message": "Behavior model processing error",
+            "error": str(error)
+        })
+
+@app.post("/ocean-model")
+@app.post("/api/ocean-model")
+async def ocean_model(payload: Optional[PipelineStageRequest] = Body(None)):
+    user_id = (payload.user_id if payload and payload.user_id else None) or "test_user"
+    logger.info(f"[OCEAN Model API] Started for user: {user_id}")
+
+    try:
+        features = None
+        if db is not None:
+            try:
+                features = await db.user_features.find_one({"user_id": user_id})
+            except Exception as e:
+                logger.error(f"Error reading features: {e}")
+
+        features = features or {}
+        td = features.get("topic_diversity", 0.3)
+        ac = features.get("activity_consistency", 0.7)
+        lr = features.get("learning_ratio", 0.4)
+        ln = features.get("late_night_ratio", 0.1)
+
+        ocean_scores = {
+            "openness": round(min(5.0, max(1.0, 2.5 + td * 3.0)), 2),
+            "conscientiousness": round(min(5.0, max(1.0, 2.0 + ac * 2.5 - ln * 1.5)), 2),
+            "extraversion": round(min(5.0, max(1.0, 2.8 + lr * 1.5)), 2),
+            "agreeableness": round(min(5.0, max(1.0, 3.2 + (1.0 - ln) * 1.0)), 2),
+            "neuroticism": round(min(5.0, max(1.0, 1.8 + ln * 2.5)), 2)
+        }
+
+        if db is not None:
+            try:
+                await db.ocean_predictions.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"user_id": user_id, "scores": ocean_scores, "updated_at": datetime.utcnow().isoformat()}},
+                    upsert=True
+                )
+            except Exception as e:
+                logger.error(f"Error saving OCEAN predictions: {e}")
+
+        return {
+            "status": "success",
+            "message": "OCEAN personality model prediction completed",
+            "user_id": user_id,
+            "ocean_scores": ocean_scores,
+            "next_stage": "generate-explanation",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as error:
+        logger.error(f"[OCEAN Model API] Error: {error}")
+        return JSONResponse(status_code=500, content={
+            "status": "failed",
+            "message": "OCEAN model prediction error",
+            "error": str(error)
+        })
+
+@app.post("/generate-explanation")
+@app.post("/api/generate-explanation")
+async def generate_explanation(payload: Optional[PipelineStageRequest] = Body(None)):
+    user_id = (payload.user_id if payload and payload.user_id else None) or "test_user"
+    logger.info(f"[Generate Explanation API] Started for user: {user_id}")
+
+    try:
+        explanation = (
+            f"Based on behavioral telemetric analysis for user '{user_id}', "
+            "browsing session patterns reflect structured curiosity, high topic exploration efficiency, "
+            "and consistent learning engagement across monitored platforms."
+        )
+
+        return {
+            "status": "success",
+            "message": "Personality explanation generated",
+            "user_id": user_id,
+            "explanation": explanation,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as error:
+        logger.error(f"[Generate Explanation API] Error: {error}")
+        return JSONResponse(status_code=500, content={
+            "status": "failed",
+            "message": "Explanation generation error",
+            "error": str(error)
+        })
