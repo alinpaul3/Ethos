@@ -7,3 +7,10 @@ pymongo
 pyjwt
 bcrypt
 google-genai
+python-dotenv
+python-multipart
+numpy
+pandas
+scikit-learn
+joblib
+requests
