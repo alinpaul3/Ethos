@@ -1,0 +1,33 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+# Environment
+.env
+.env.*
+
+# Node
+node_modules/
+dist/
+build/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ML
+*.pkl
+*.joblib
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

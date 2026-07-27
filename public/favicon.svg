@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="ethos-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="24" fill="#0f172a" />
+  <path d="M 30 28 L 70 28 M 30 28 L 30 72 L 70 72 M 30 50 L 62 50" stroke="url(#ethos-grad)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+  <circle cx="70" cy="50" r="5" fill="#a855f7" />
+</svg>

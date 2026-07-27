@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      width: 250px;
+      padding: 15px;
+      font-family: sans-serif;
+      background: #FDFCFB;
+      color: #1a1a1a;
+      margin: 0;
+    }
+    .status {
+      margin-top: 10px;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .active { color: #16a34a; }
+    .inactive { color: #ea580c; }
+    .input-group {
+      margin-top: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .input-group label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #666;
+    }
+    .input-group input {
+      padding: 8px;
+      font-family: monospace;
+      font-size: 11px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+    }
+    .input-group button {
+      padding: 8px;
+      background: #1a1a1a;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: bold;
+    }
+    .input-group button:hover {
+      background: #333;
+    }
+    hr {
+      margin: 15px 0;
+      border: 0;
+      border-top: 1px solid #eee;
+    }
+    small {
+      display: block;
+      font-size: 11px;
+      color: #666;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <h3 style="margin: 0; font-family: serif; font-style: italic;">Ethos Analytics</h3>
+  <div id="status" class="status">Initializing...</div>
+  
+  <div class="input-group">
+    <label for="user-id-input">Subject ID</label>
+    <input type="text" id="user-id-input" placeholder="Paste Subject ID here" />
+  </div>
+
+  <div class="input-group" style="margin-top: 10px;">
+    <label for="server-url-input">Server URL</label>
+    <input type="text" id="server-url-input" placeholder="Detecting automatically..." />
+  </div>
+
+  <div class="input-group" style="margin-top: 10px;">
+    <button id="save-btn">Sync Node Credentials</button>
+  </div>
+
+  <hr />
+  <small id="user-id">User: Loading...</small>
+  <small id="server-url" style="margin-top: 5px;">Server: Loading...</small>
+  <script src="popup.js"></script>
+</body>
+</html>

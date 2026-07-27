@@ -1,0 +1,6 @@
+{
+  "name": "Ethos Analytics",
+  "description": "Onboarding, telemetry logging, and consent management platform for behavioral analytics, featuring secure user authentication, BFI-44 survey psychometrics, and Chrome extension linkage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

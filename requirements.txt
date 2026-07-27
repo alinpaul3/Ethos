@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+motor
+pydantic
+httpx
+pymongo
+pyjwt
+bcrypt
+google-genai

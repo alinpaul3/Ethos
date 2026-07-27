@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+body {
+  @apply font-sans antialiased bg-[#f8fafc] text-slate-900 selection:bg-amber-200 selection:text-amber-900;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.2);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.4);
+}
+
+/* Glassmorphism & Card Utility Classes */
+.glass-card {
+  @apply bg-white/80 backdrop-blur-md border border-slate-200/80 rounded-2xl shadow-sm transition-all duration-300 hover:shadow-md hover:border-slate-300;
+}
+
+.glass-card-dark {
+  @apply bg-slate-900/90 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-xl text-white;
+}
+
+.editorial-card {
+  @apply bg-white border border-slate-200/80 rounded-2xl p-8 shadow-sm transition-all hover:shadow-md;
+}
+
+.editorial-label {
+  @apply text-[10px] uppercase tracking-[0.2em] font-bold text-slate-500 block mb-2 font-mono;
+}
+
+.editorial-heading {
+  @apply text-3xl font-bold leading-tight text-slate-900;
+}
+
+.editorial-btn-primary {
+  @apply px-6 py-3 bg-slate-900 text-white text-xs uppercase tracking-widest font-bold rounded-xl hover:bg-slate-800 active:scale-[0.98] transition-all shadow-sm hover:shadow disabled:bg-slate-300 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2;
+}
+
+.editorial-btn-secondary {
+  @apply px-6 py-3 border border-slate-300 bg-white text-slate-800 text-xs uppercase tracking-widest font-bold rounded-xl hover:bg-slate-50 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2;
+}
+
+.editorial-badge {
+  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-medium uppercase tracking-wider;
+}
+
+.editorial-header {
+  @apply h-16 border-b border-slate-200/80 bg-white/80 backdrop-blur-md flex items-center justify-between px-8 sticky top-0 z-30;
+}
+
+.editorial-footer {
+  @apply h-14 border-t border-slate-200/80 bg-white px-8 flex items-center justify-between text-[10px] uppercase tracking-wider font-mono text-slate-400;
+}
+
+/* Animations */
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.15); }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s infinite ease-in-out;
+}
+

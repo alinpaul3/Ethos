@@ -1,0 +1,432 @@
+{
+  "name": "Production Personality Detection Orchestration Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-pipeline",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e49eb7fb-f7cc-4299-80fb-64b58e7456d9",
+      "name": "Receive Event Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        100,
+        300
+      ],
+      "notesInFlow": true,
+      "notes": "Webhook trigger accepting user_id event payload"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Step 1: Extract User ID & Log Workflow Start\nconst input = $input.first().json;\nconst body = input.body || input;\nconst user_id = body.user_id || body.event?.user_id;\n\nif (!user_id) {\n  console.error(\"[n8n Orchestrator] [ERROR] Missing user_id in trigger payload.\");\n  throw new Error(\"Missing user_id in trigger request\");\n}\n\nconsole.log(`[n8n Orchestrator] [START] Workflow initiated for user_id: ${user_id} at ${new Date().toISOString()}`);\n\nreturn [{\n  json: {\n    user_id: user_id,\n    triggered_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+      "name": "Log Workflow Start",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        300
+      ],
+      "notesInFlow": true,
+      "notes": "Logs workflow initiation and extracts user_id"
+    },
+    {
+      "parameters": {
+        "operation": "find",
+        "collection": "behavior_profiles",
+        "query": "={\n  \"user_id\": \"{{ $('Log Workflow Start').first().json.user_id }}\"\n}",
+        "options": {}
+      },
+      "id": "5fcf728e-906f-40e9-b5fe-a79ff176985c",
+      "name": "Get Behavior Profile Metadata",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1,
+      "position": [
+        500,
+        200
+      ],
+      "notesInFlow": true,
+      "notes": "Queries behavior_profiles for last_processed_timestamp, count, and status"
+    },
+    {
+      "parameters": {
+        "operation": "aggregate",
+        "collection": "raw_events",
+        "query": "=\n[\n  {\n    \"$match\": {\n      \"user_id\": \"{{ $('Log Workflow Start').first().json.user_id }}\"\n    }\n  },\n  {\n    \"$group\": {\n      \"_id\": null,\n      \"total_events\": { \"$sum\": 1 },\n      \"latest_timestamp\": { \"$max\": \"$timestamp_start\" }\n    }\n  }\n]",
+        "options": {}
+      },
+      "id": "caee3df3-0b04-4c6e-826d-49568913b7da",
+      "name": "Count & Get Latest Event Timestamp",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1,
+      "position": [
+        500,
+        400
+      ],
+      "notesInFlow": true,
+      "notes": "Aggregates total_events count and latest_timestamp using MongoDB $group"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Step 4: Evaluate Incremental Event Metrics & Threshold\nconst userId = $('Log Workflow Start').first().json.user_id;\n\n// MongoDB Group Aggregation result\nconst aggItems = $('Count & Get Latest Event Timestamp').all();\nconst aggData = aggItems.length > 0 ? aggItems[0].json : {};\nconst totalEvents = aggData.total_events || 0;\nconst latestTimestamp = aggData.latest_timestamp || new Date().toISOString();\n\n// Behavior Profile metadata\nconst profileItems = $('Get Behavior Profile Metadata').all();\nconst profileData = profileItems.length > 0 ? profileItems[0].json : {};\nconst lastProcessedCount = profileData.last_processed_event_count || 0;\nconst lastProcessedTimestamp = profileData.last_processed_timestamp || \"1970-01-01T00:00:00.000Z\";\n\nconst thresholdMet = totalEvents >= 100;\nconst hasNewEvents = totalEvents > lastProcessedCount || latestTimestamp > lastProcessedTimestamp;\nconst shouldProcess = thresholdMet && hasNewEvents;\n\nconsole.log(`[n8n Orchestrator] [EVALUATE] User: ${userId} | Total Events: ${totalEvents} | Last Processed Count: ${lastProcessedCount} | Latest TS: ${latestTimestamp} | Last TS: ${lastProcessedTimestamp} | Action: ${shouldProcess ? 'PROCEED_TO_FASTAPI' : 'SKIP'}`);\n\nreturn [{\n  json: {\n    user_id: userId,\n    total_events: totalEvents,\n    last_processed_count: lastProcessedCount,\n    latest_timestamp: latestTimestamp,\n    last_processed_timestamp: lastProcessedTimestamp,\n    threshold_met: thresholdMet,\n    has_new_events: hasNewEvents,\n    should_process: shouldProcess,\n    evaluated_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e",
+      "name": "Evaluate Incremental Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ],
+      "notesInFlow": true,
+      "notes": "Compares current_event_count & timestamp against threshold (100) and metadata"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.should_process }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "3be6063e-7910-4bc2-841f-818177ca00cb",
+      "name": "Threshold Check IF",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        920,
+        300
+      ],
+      "notesInFlow": true,
+      "notes": "Branches based on whether total_events >= 100 and new unprocessed events exist"
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "responseBody": "={\n  \"status\": \"skipped\",\n  \"message\": \"Event threshold (100) not reached or no new events accumulated since last processing run\",\n  \"user_id\": \"{{ $json.user_id }}\",\n  \"total_events\": {{ $json.total_events }},\n  \"last_processed_count\": {{ $json.last_processed_count }},\n  \"timestamp\": \"{{ $json.evaluated_at }}\"\n}"
+      },
+      "id": "481a5661-89d3-469a-a828-56e6bc03e1e2",
+      "name": "Respond - Skipped",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        920,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Step 6: Log Threshold Met & Dispatch Request\nconst data = $input.first().json;\nconsole.log(`[n8n Orchestrator] [DISPATCH] Threshold reached (${data.total_events} events). Dispatching POST to FastAPI /process-data for user_id: ${data.user_id}`);\n\nreturn [{\n  json: {\n    user_id: data.user_id,\n    total_events: data.total_events,\n    latest_timestamp: data.latest_timestamp,\n    dispatched_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f",
+      "name": "Log Dispatch Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        200
+      ],
+      "notesInFlow": true,
+      "notes": "Logs API dispatch event"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FASTAPI_BASE_URL || 'http://localhost:8000' }}/process-data",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"user_id\": \"{{ $json.user_id }}\"\n}",
+        "options": {
+          "neverError": true,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "834c9c0b-1933-4f9d-b4f0-466a9c0ea5b5",
+      "name": "Call FastAPI /process-data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1320,
+        200
+      ],
+      "notesInFlow": true,
+      "notes": "Triggers FastAPI processing endpoint with options.neverError=true to safely capture response"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Step 8: Capture and Log FastAPI Response\nconst resItem = $input.first().json;\nconst evalContext = $('Evaluate Incremental Metrics').first().json;\n\n// Extract status code and body safely\nconst statusCode = resItem.statusCode || resItem.status || (resItem.body ? 200 : 500);\nconst body = resItem.body || resItem;\nconst isSuccess = statusCode >= 200 && statusCode < 300;\n\nconsole.log(`[n8n Orchestrator] [RESPONSE] FastAPI returned HTTP ${statusCode} for user_id: ${evalContext.user_id}. Success: ${isSuccess}`);\nif (!isSuccess) {\n  console.error(`[n8n Orchestrator] [ERROR_DETAIL] FastAPI Response:`, JSON.stringify(body));\n}\n\nreturn [{\n  json: {\n    user_id: evalContext.user_id,\n    http_status: statusCode,\n    is_success: isSuccess,\n    total_events: evalContext.total_events,\n    latest_timestamp: evalContext.latest_timestamp,\n    backend_response: body,\n    evaluated_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a",
+      "name": "Log & Parse FastAPI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        200
+      ],
+      "notesInFlow": true,
+      "notes": "Parses HTTP status code and response payload"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b",
+      "name": "FastAPI Success IF",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1720,
+        200
+      ],
+      "notesInFlow": true,
+      "notes": "Verifies HTTP status is 2xx"
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 500
+        },
+        "responseBody": "={\n  \"status\": \"failed\",\n  \"user_id\": \"{{ $json.user_id }}\",\n  \"http_status\": {{ $json.http_status }},\n  \"error\": \"FastAPI /process-data failed to complete pipeline processing\",\n  \"backend_response\": {{ JSON.stringify($json.backend_response) }},\n  \"timestamp\": \"{{ $json.evaluated_at }}\"\n}"
+      },
+      "id": "6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c",
+      "name": "Respond - FastAPI Failure",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1720,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "collection": "behavior_profiles",
+        "query": "={\n  \"user_id\": \"{{ $json.user_id }}\"\n}",
+        "updateFields": "={\n  \"$set\": {\n    \"user_id\": \"{{ $json.user_id }}\",\n    \"last_processed_event_count\": {{ $json.total_events }},\n    \"last_processed_timestamp\": \"{{ $json.latest_timestamp }}\",\n    \"last_processed_at\": \"{{ new Date().toISOString() }}\",\n    \"pipeline_status\": \"completed\",\n    \"pipeline_version\": \"v1\"\n  }\n}",
+        "options": {
+          "upsert": true
+        }
+      },
+      "id": "7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d",
+      "name": "Update Behavior Profile Metadata",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1,
+      "position": [
+        1920,
+        200
+      ],
+      "notesInFlow": true,
+      "notes": "Persists last_processed_event_count, last_processed_timestamp, pipeline_status, and pipeline_version"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Step 11: Validate MongoDB Metadata Update Success\nconst mongoResult = $input.first().json;\nconst parentContext = $('Log & Parse FastAPI Response').first().json;\n\nconst isUpdateValid = mongoResult !== null && mongoResult !== undefined;\n\nconsole.log(`[n8n Orchestrator] [SUCCESS] Pipeline execution finished cleanly for user_id: ${parentContext.user_id}. Metadata updated.`);\n\nreturn [{\n  json: {\n    status: \"success\",\n    user_id: parentContext.user_id,\n    processed_event_count: parentContext.total_events,\n    last_processed_timestamp: parentContext.latest_timestamp,\n    pipeline_status: \"completed\",\n    pipeline_version: \"v1\",\n    completed_at: new Date().toISOString(),\n    backend_response: parentContext.backend_response\n  }\n}];"
+      },
+      "id": "8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e",
+      "name": "Format Success Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2120,
+        200
+      ],
+      "notesInFlow": true,
+      "notes": "Formats final success response structure"
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "d04070a2-b918-4a15-b76e-34653ae89bb7",
+      "name": "Respond - Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2320,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Receive Event Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Workflow Start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Workflow Start": {
+      "main": [
+        [
+          {
+            "node": "Get Behavior Profile Metadata",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Count & Get Latest Event Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Behavior Profile Metadata": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Incremental Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count & Get Latest Event Timestamp": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Incremental Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Incremental Metrics": {
+      "main": [
+        [
+          {
+            "node": "Threshold Check IF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Threshold Check IF": {
+      "main": [
+        [
+          {
+            "node": "Log Dispatch Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond - Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Dispatch Event": {
+      "main": [
+        [
+          {
+            "node": "Call FastAPI /process-data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call FastAPI /process-data": {
+      "main": [
+        [
+          {
+            "node": "Log & Parse FastAPI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log & Parse FastAPI Response": {
+      "main": [
+        [
+          {
+            "node": "FastAPI Success IF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FastAPI Success IF": {
+      "main": [
+        [
+          {
+            "node": "Update Behavior Profile Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond - FastAPI Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Behavior Profile Metadata": {
+      "main": [
+        [
+          {
+            "node": "Format Success Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success Payload": {
+      "main": [
+        [
+          {
+            "node": "Respond - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "meta": {
+    "templateId": "pipeline-orchestration"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,53 @@
+export interface Bfi44Question {
+  id: number;
+  text: string;
+  domain: "extraversion" | "agreeableness" | "conscientiousness" | "neuroticism" | "openness";
+  isReverse: boolean;
+}
+
+export const BFI44_QUESTIONS: Bfi44Question[] = [
+  { id: 1, text: "Is talkative", domain: "extraversion", isReverse: false },
+  { id: 2, text: "Tends to find fault with others", domain: "agreeableness", isReverse: true },
+  { id: 3, text: "Does a thorough job", domain: "conscientiousness", isReverse: false },
+  { id: 4, text: "Is depressed, blue", domain: "neuroticism", isReverse: false },
+  { id: 5, text: "Is original, comes up with new ideas", domain: "openness", isReverse: false },
+  { id: 6, text: "Is reserved", domain: "extraversion", isReverse: true },
+  { id: 7, text: "Is helpful and unselfish with others", domain: "agreeableness", isReverse: false },
+  { id: 8, text: "Can be somewhat careless", domain: "conscientiousness", isReverse: true },
+  { id: 9, text: "Is relaxed, handles stress well", domain: "neuroticism", isReverse: true },
+  { id: 10, text: "Is curious about many different things", domain: "openness", isReverse: false },
+  { id: 11, text: "Is full of energy", domain: "extraversion", isReverse: false },
+  { id: 12, text: "Starts quarrels with others", domain: "agreeableness", isReverse: true },
+  { id: 13, text: "Is a reliable worker", domain: "conscientiousness", isReverse: false },
+  { id: 14, text: "Can be tense", domain: "neuroticism", isReverse: false },
+  { id: 15, text: "Is ingenious, a deep thinker", domain: "openness", isReverse: false },
+  { id: 16, text: "Generates a lot of enthusiasm", domain: "extraversion", isReverse: false },
+  { id: 17, text: "Has a forgiving nature", domain: "agreeableness", isReverse: false },
+  { id: 18, text: "Tends to be disorganized", domain: "conscientiousness", isReverse: true },
+  { id: 19, text: "Worries a lot", domain: "neuroticism", isReverse: false },
+  { id: 20, text: "Has an active imagination", domain: "openness", isReverse: false },
+  { id: 21, text: "Tends to be quiet", domain: "extraversion", isReverse: true },
+  { id: 22, text: "Is generally trusting", domain: "agreeableness", isReverse: false },
+  { id: 23, text: "Tends to be lazy", domain: "conscientiousness", isReverse: true },
+  { id: 24, text: "Is emotionally stable, not easily upset", domain: "neuroticism", isReverse: true },
+  { id: 25, text: "Is inventive", domain: "openness", isReverse: false },
+  { id: 26, text: "Has an assertive personality", domain: "extraversion", isReverse: false },
+  { id: 27, text: "Can be cold and aloof", domain: "agreeableness", isReverse: true },
+  { id: 28, text: "Perseveres until the task is finished", domain: "conscientiousness", isReverse: false },
+  { id: 29, text: "Can be moody", domain: "neuroticism", isReverse: false },
+  { id: 30, text: "Values artistic, aesthetic experiences", domain: "openness", isReverse: false },
+  { id: 31, text: "Is sometimes shy, inhibited", domain: "extraversion", isReverse: true },
+  { id: 32, text: "Is considerate, kind to almost everyone", domain: "agreeableness", isReverse: false },
+  { id: 33, text: "Does things efficiently", domain: "conscientiousness", isReverse: false },
+  { id: 34, text: "Remains calm in tense situations", domain: "neuroticism", isReverse: true },
+  { id: 35, text: "Prefers work that is routine", domain: "openness", isReverse: true },
+  { id: 36, text: "Is outgoing, sociable", domain: "extraversion", isReverse: false },
+  { id: 37, text: "Is sometimes rude to others", domain: "agreeableness", isReverse: true },
+  { id: 38, text: "Makes plans and follows through on them", domain: "conscientiousness", isReverse: false },
+  { id: 39, text: "Gets nervous easily", domain: "neuroticism", isReverse: false },
+  { id: 40, text: "Likes to reflect, play with ideas", domain: "openness", isReverse: false },
+  { id: 41, text: "Has few artistic interests", domain: "openness", isReverse: true },
+  { id: 42, text: "Likes to cooperate with others", domain: "agreeableness", isReverse: false },
+  { id: 43, text: "Is easily distracted", domain: "conscientiousness", isReverse: true },
+  { id: 44, text: "Is sophisticated in art, music, or literature", domain: "openness", isReverse: false },
+];

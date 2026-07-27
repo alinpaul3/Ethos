@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Ethos Analytics Tracker",
+  "version": "1.0",
+  "description": "Tracks YouTube watch activity for behavioral analysis.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://*.asia-east1.run.app/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://*.asia-east1.run.app/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["content.js"],
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
