@@ -56,10 +56,15 @@ export default function App() {
     );
   }
 
+  const handleLogout = () => {
+    setUser(null);
+    setConsentGiven(null);
+  };
+
   return (
     <BrowserRouter>
       <Routes>
-        <Route element={<Layout user={user} />}>
+        <Route element={<Layout user={user} onLogout={handleLogout} />}>
           <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />} />
           <Route path="/login" element={!user ? <LoginPage onAuth={setUser} /> : <Navigate to="/dashboard" />} />
           <Route path="/signup" element={!user ? <SignupPage onAuth={setUser} /> : <Navigate to="/dashboard" />} />

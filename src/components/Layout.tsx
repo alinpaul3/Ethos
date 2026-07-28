@@ -1,12 +1,14 @@
 import { ReactNode, useState, useEffect } from "react";
 import { Outlet, Link, useNavigate, useLocation } from "react-router-dom";
 import { LogOut, LayoutDashboard, ShieldCheck, Chrome, FileText, Cpu, Activity, Sparkles, Server, CheckCircle2 } from "lucide-react";
+import { apiFetch } from "../lib/api";
 
 interface LayoutProps {
   user: { user_id: string; email: string } | null;
+  onLogout?: () => void;
 }
 
-export function Layout({ user }: LayoutProps) {
+export function Layout({ user, onLogout }: LayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const [time, setTime] = useState(new Date().toLocaleTimeString());
@@ -18,10 +20,14 @@ export function Layout({ user }: LayoutProps) {
 
   const handleLogout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
-      window.location.href = "/login";
+      await apiFetch("/api/auth/logout", { method: "POST" });
     } catch (err) {
-      console.error(err);
+       console.error("Logout error:", err);
+    } finally {
+      if (onLogout) {
+        onLogout();
+      }
+      navigate("/login", { replace: true });
     }
   };
 

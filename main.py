@@ -389,7 +389,8 @@ async def signup(response: Response, payload: SignupRequest):
         httponly=True,
         max_age=7 * 24 * 60 * 60,
         samesite="lax",
-        secure=False
+        secure=False,
+        path="/"
     )
     
     return {"user_id": user_id, "email": payload.email, "message": "User created successfully"}
@@ -413,7 +414,8 @@ async def login(response: Response, payload: LoginRequest):
        httponly=True,
        max_age=7 * 24 * 60 * 60,
        samesite="none",
-       secure=True
+       secure=True,
+       path="/"
     )
     
     return {"user_id": user["user_id"], "email": user["email"]}
@@ -424,7 +426,21 @@ async def me(current_user: dict = Depends(get_current_user)):
 
 @app.post("/api/auth/logout")
 async def logout(response: Response):
-    response.delete_cookie("auth_token")
+    response.delete_cookie(
+        key="auth_token",
+        path="/",
+        samesite="lax",
+        httponly=True
+    )
+    response.set_cookie(
+        key="auth_token",
+        value="",
+        max_age=0,
+        expires=0,
+        path="/",
+        httponly=True,
+        samesite="lax"
+    )
     return {"message": "Logged out"}
 
 # --- PHASE 1: CONSENT ---
