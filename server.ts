@@ -621,23 +621,23 @@ async function startServer() {
     if (rawEvents.length === 0) return null;
 
     // 2. Preprocessing & Feature Extraction
-    const processedEvents = rawEvents.filter((e: any) => e.duration_seconds >= 5 && e.content_title);
+    const processedEvents = rawEvents.filter((e: any) => (Number(e.duration_seconds) >= 1 || e.url || e.content_title));
     
-    const totalEvents = processedEvents.length;
-    if (totalEvents === 0) return null;
+    const totalEvents = processedEvents.length > 0 ? processedEvents.length : rawEvents.length;
+    const eventsToUse = processedEvents.length > 0 ? processedEvents : rawEvents;
 
-    const totalWatchTime = processedEvents.reduce((acc: number, e: any) => acc + e.duration_seconds, 0);
-    const avgSessionDuration = totalWatchTime / totalEvents;
+    const totalWatchTime = eventsToUse.reduce((acc: number, e: any) => acc + (Number(e.duration_seconds) || 0), 0);
+    const avgSessionDuration = eventsToUse.length > 0 ? totalWatchTime / eventsToUse.length : 0;
     
-    const lateNightRatio = calculateLateNightRatio(processedEvents);
-    const activityConsistency = calculateActivityConsistency(processedEvents);
-    const topicDiversity = calculateTopicDiversity(processedEvents);
-    const learningRatio = calculateLearningRatio(processedEvents);
-    const repetitionScore = calculateRepetitionScore(processedEvents);
+    const lateNightRatio = calculateLateNightRatio(eventsToUse);
+    const activityConsistency = calculateActivityConsistency(eventsToUse);
+    const topicDiversity = calculateTopicDiversity(eventsToUse);
+    const learningRatio = calculateLearningRatio(eventsToUse);
+    const repetitionScore = calculateRepetitionScore(eventsToUse);
     
-    const sentimentScores = processedEvents.map((e: any) => getSentimentScore(e.content_title));
-    const avgSentiment = sentimentScores.reduce((a: number, b: number) => a + b, 0) / totalEvents;
-    const sentimentVariance = sentimentScores.reduce((a: number, b: number) => a + Math.pow(b - avgSentiment, 2), 0) / totalEvents;
+    const sentimentScores = eventsToUse.map((e: any) => getSentimentScore(e.content_title || e.url || ""));
+    const avgSentiment = sentimentScores.length > 0 ? (sentimentScores.reduce((a: number, b: number) => a + b, 0) / sentimentScores.length) : 0;
+    const sentimentVariance = sentimentScores.length > 0 ? (sentimentScores.reduce((a: number, b: number) => a + Math.pow(b - avgSentiment, 2), 0) / sentimentScores.length) : 0;
 
     // 3. Aggregate into User Features
     const userFeatures = {
@@ -1379,11 +1379,32 @@ async function startServer() {
         console.error("Auto-processing during dashboard fetch failed:", err);
       });
 
-      const features = await collections.user_features.findOne({ user_id });
+      let features = await collections.user_features.findOne({ user_id });
       const profile = await collections.behavior_profiles.findOne({ user_id });
       const questionnaire = await collections.questionnaire_responses.findOne({ user_id, questionnaire_type: "BFI-44" });
       const events = await collections.raw_events.find({ user_id }).toArray();
       const enrichedEvents = await collections.enriched_events.find({ user_id }).toArray();
+
+      
+      if ((!features || !features.total_watch_time) && events.length > 0) {
+        const totalWatchTime = events.reduce((acc: number, e: any) => acc + (Number(e.duration_seconds) || 0), 0);
+        const avgSessionDuration = events.length > 0 ? totalWatchTime / events.length : 0;
+        const sentimentScores = events.map((e: any) => getSentimentScore(e.content_title || e.url || ""));
+        const avgSentiment = events.length > 0 ? (sentimentScores.reduce((a: number, b: number) => a + b, 0) / events.length) : 0;
+        features = {
+          user_id,
+          total_events: events.length,
+          avg_session_duration: avgSessionDuration,
+          total_watch_time: totalWatchTime,
+          late_night_ratio: 0,
+          topic_diversity: 0.5,
+          learning_ratio: 0.5,
+          repetition_score: 0,
+          activity_consistency: 1,
+          avg_sentiment: avgSentiment,
+          processed_at: new Date().toISOString()
+        };
+      }
 
       // Build official title map
       const officialTitleMap: Record<string, string> = {};
@@ -1409,7 +1430,7 @@ async function startServer() {
           }
         }
       }
-      
+
       // Sort events by timestamp or created_at (descending)
       const sortedEvents = events.sort((a: any, b: any) => {
         const timeA = new Date(a.created_at || a.timestamp_start || 0).getTime();

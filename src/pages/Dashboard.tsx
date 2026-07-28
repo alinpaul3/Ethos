@@ -122,6 +122,21 @@ export function Dashboard({ user }: DashboardProps) {
   const profile = data?.profile || {};
   const signals = profile.signals || {};
 
+    // Compute robust metrics fallback from captured events if features document is pending/null
+  const computedTotalWatchTime = recentEvents.reduce((acc: number, e: any) => acc + (Number(e.duration_seconds) || 0), 0);
+  const totalWatchTime = (features.total_watch_time && features.total_watch_time > 0)
+    ? features.total_watch_time
+    : computedTotalWatchTime;
+
+  const computedAvgSession = recentEvents.length > 0 ? computedTotalWatchTime / recentEvents.length : 0;
+  const avgWatchTime = (features.avg_session_duration && features.avg_session_duration > 0)
+    ? features.avg_session_duration
+    : computedAvgSession;
+
+  const avgSentiment = (features.avg_sentiment !== undefined && features.avg_sentiment !== null)
+    ? features.avg_sentiment
+    : 0.0;
+
   const filteredEnriched = recentEnrichedEvents.filter((item: any) => {
     if (!searchTerm) return true;
     const title = item.youtube_metadata?.official_title || item.browser_event?.content_title || "";
@@ -330,22 +345,22 @@ export function Dashboard({ user }: DashboardProps) {
         <StatCard
           icon={<Clock className="w-5 h-5 text-cyan-500" />}
           label="Avg Watch Time"
-          value={features.avg_session_duration ? formatDuration(features.avg_session_duration) : "0s"}
+          value={formatDuration(avgWatchTime)}
           badge="Per Session"
           color="cyan"
         />
         <StatCard
           icon={<Database className="w-5 h-5 text-emerald-500" />}
           label="Total Ingestion"
-          value={features.total_watch_time ? formatDuration(features.total_watch_time) : "0s"}
+          value={formatDuration(totalWatchTime)}
           badge="Cumulative"
           color="emerald"
         />
         <StatCard
           icon={<Brain className="w-5 h-5 text-violet-500" />}
           label="Sentiment Balance"
-          value={features.avg_sentiment !== undefined ? `${features.avg_sentiment > 0 ? "+" : ""}${features.avg_sentiment.toFixed(1)}` : "0.0"}
-          badge={features.avg_sentiment > 0 ? "Positive" : "Neutral"}
+          value={`${avgSentiment > 0 ? "+" : ""}${avgSentiment.toFixed(1)}`}
+          badge={avgSentiment > 0 ? "Positive" : "Neutral"}
           color="violet"
         />
       </div>

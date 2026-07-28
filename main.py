@@ -1004,7 +1004,26 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
                 vid = r_url.split("v=")[1].split("&")[0]
                 if vid in official_title_map:
                     re["content_title"] = official_title_map[vid]
-                    
+
+        if (not features or not features.get("total_watch_time")) and raw_events:
+            total_time = sum(float(e.get("duration_seconds") or 0) for e in raw_events)
+            avg_dur = total_time / len(raw_events) if raw_events else 0.0
+            sent_scores = [get_sentiment_score(e.get("content_title") or "") for e in raw_events]
+            avg_sent = (sum(sent_scores) / len(raw_events)) if raw_events else 0.0
+            features = {
+                "user_id": target_user_id,
+                "total_events": len(raw_events),
+                "avg_session_duration": avg_dur,
+                "total_watch_time": total_time,
+                "late_night_ratio": 0.0,
+                "topic_diversity": 0.5,
+                "learning_ratio": 0.5,
+                "repetition_score": 0.0,
+                "activity_consistency": 1.0,
+                "avg_sentiment": avg_sent,
+                "processed_at": datetime.utcnow().isoformat()
+            }
+ 
         def event_time(e):
             return e.get("created_at") or e.get("timestamp_start") or ""
 
