@@ -4,7 +4,7 @@ from enrichment_service import enrich_event_pipeline
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timedelta
 import os
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 import httpx
 import logging
 import statistics
@@ -15,6 +15,12 @@ from uuid import uuid4
 from typing import List, Optional
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+import zipfile
+import io
+import subprocess
+import json
+import time
+from typing import List, Optional, Dict, Any
 
 load_dotenv()
 # Setup logging
@@ -92,6 +98,22 @@ def decode_jwt(token: str) -> Optional[dict]:
 #     if not payload:
 #         raise HTTPException(status_code=403, detail="Invalid or expired token")
 #     return payload
+def sanitize_doc(doc):
+    if doc is None:
+        return None
+    if isinstance(doc, list):
+        return [sanitize_doc(d) for d in doc]
+    if isinstance(doc, dict):
+        new_doc = {}
+        for k, v in doc.items():
+            if k == "_id":
+                new_doc[k] = str(v)
+            elif isinstance(v, (dict, list)):
+                new_doc[k] = sanitize_doc(v)
+            else:
+                new_doc[k] = v
+        return new_doc
+    return doc
 
 async def get_current_user(request: Request):
     token = request.cookies.get("auth_token")
@@ -150,6 +172,108 @@ class PipelineStageRequest(BaseModel):
     events: Optional[List[dict]] = None
     features: Optional[dict] = None
     signals: Optional[dict] = None
+
+class BfiResponseItem(BaseModel):
+    question_id: int
+    score: int
+
+class BfiSubmissionRequest(BaseModel):
+    user_id: Optional[str] = None
+    questionnaire_type: Optional[str] = "BFI-44"
+    responses: List[Dict[str, Any]]
+    consent_version: Optional[str] = "v1.0"
+
+class ExtensionRegisterRequest(BaseModel):
+    pairing_token: str
+
+class MlPredictRequest(BaseModel):
+    user_id: Optional[str] = None
+    features: Optional[Dict[str, Any]] = None
+
+pairing_tokens: Dict[str, Dict[str, Any]] = {}
+
+def validate_bfi44_responses(responses: Any) -> Dict[str, Any]:
+    if not isinstance(responses, list):
+        return {"is_valid": False, "error": "responses field must be an array"}
+    if len(responses) != 44:
+        return {"is_valid": False, "error": f"responses array must contain exactly 44 items (received {len(responses)})"}
+    seen_ids = set()
+    for i, item in enumerate(responses):
+        if not isinstance(item, dict):
+            return {"is_valid": False, "error": f"Invalid response format at index {i}"}
+        try:
+            q_id = int(item.get("question_id"))
+            score = int(item.get("score"))
+        except (TypeError, ValueError):
+            return {"is_valid": False, "error": f"Invalid question_id or score at index {i}"}
+
+        if q_id < 1 or q_id > 44:
+            return {"is_valid": False, "error": f"Invalid question_id '{q_id}' at index {i}. Must be 1..44."}
+        if q_id in seen_ids:
+            return {"is_valid": False, "error": f"Duplicate question_id {q_id} found in responses."}
+        seen_ids.add(q_id)
+
+        if score < 1 or score > 5:
+            return {"is_valid": False, "error": f"Invalid score '{score}' for question_id {q_id}. Must be 1..5."}
+
+    if len(seen_ids) != 44:
+        return {"is_valid": False, "error": "All 44 question_ids (1 to 44) must be present in the responses."}
+
+    return {"is_valid": True}
+
+def calculate_bfi44_scores(responses: List[dict]) -> dict:
+    score_map = {}
+    for r in responses:
+        score_map[int(r["question_id"])] = int(r["score"])
+
+    def get_score(q_id: int, is_reverse: bool) -> int:
+        raw = score_map.get(q_id, 3)
+        return (6 - raw) if is_reverse else raw
+
+    extraversion_items = [
+        get_score(1, False), get_score(6, True), get_score(11, False), get_score(16, False),
+        get_score(21, True), get_score(26, False), get_score(31, True), get_score(36, False)
+    ]
+    agreeableness_items = [
+        get_score(2, True), get_score(7, False), get_score(12, True), get_score(17, False),
+        get_score(22, False), get_score(27, True), get_score(32, False), get_score(37, True)
+    ]
+    conscientiousness_items = [
+        get_score(3, False), get_score(8, True), get_score(13, False), get_score(18, True),
+        get_score(23, True), get_score(28, False), get_score(33, False), get_score(38, False), get_score(43, True)
+    ]
+    neuroticism_items = [
+        get_score(4, False), get_score(9, True), get_score(14, False), get_score(19, False),
+        get_score(24, True), get_score(29, False), get_score(34, True), get_score(39, False)
+    ]
+    openness_items = [
+        get_score(5, False), get_score(10, False), get_score(15, False), get_score(20, False),
+        get_score(25, False), get_score(30, False), get_score(35, True), get_score(40, False),
+        get_score(41, True), get_score(44, False)
+    ]
+
+    avg = lambda arr: round(sum(arr) / len(arr), 2)
+
+    ext = avg(extraversion_items)
+    agr = avg(agreeableness_items)
+    con = avg(conscientiousness_items)
+    neu = avg(neuroticism_items)
+    ope = avg(openness_items)
+
+    return {
+        "extraversion": ext,
+        "agreeableness": agr,
+        "conscientiousness": con,
+        "neuroticism": neu,
+        "openness": ope,
+        "normalized": {
+            "extraversion": round((ext - 1) / 4, 2),
+            "agreeableness": round((agr - 1) / 4, 2),
+            "conscientiousness": round((con - 1) / 4, 2),
+            "neuroticism": round((neu - 1) / 4, 2),
+            "openness": round((ope - 1) / 4, 2)
+        }
+    }
 
 
 @app.on_event("startup")
@@ -802,3 +926,450 @@ async def generate_explanation(payload: Optional[PipelineStageRequest] = Body(No
             "message": "Explanation generation error",
             "error": str(error)
         })
+@app.get("/api/dashboard-data")
+@app.get("/api/dashboard")
+async def get_dashboard(request: Request, user_id: Optional[str] = None):
+    current_user_id = None
+    token = request.cookies.get("auth_token")
+    if token:
+        payload = decode_jwt(token)
+        if payload and "user_id" in payload:
+            current_user_id = payload["user_id"]
+    
+    target_user_id = user_id or current_user_id
+    if not target_user_id:
+        # Fallback to test_user or first user if available
+        target_user_id = "test_user"
+
+    if db is None:
+        return {
+            "user_id": target_user_id,
+            "features": None,
+            "profile": None,
+            "questionnaire_response": None,
+            "recent_events": [],
+            "recent_enriched_events": [],
+            "total_captured_events": 0
+        }
+
+    try:
+        features = await db.user_features.find_one({"user_id": target_user_id})
+        profile = await db.behavior_profiles.find_one({"user_id": target_user_id})
+        questionnaire = await db.questionnaire_responses.find_one({
+            "user_id": target_user_id,
+            "questionnaire_type": "BFI-44"
+        })
+        if not questionnaire:
+            questionnaire = await db.questionnaire_responses.find_one({"user_id": target_user_id})
+
+        raw_events = await db.raw_events.find({"user_id": target_user_id}).to_list(1000)
+        enriched_events = await db.enriched_events.find({"user_id": target_user_id}).to_list(1000)
+
+        def event_time(e):
+            return e.get("created_at") or e.get("timestamp_start") or ""
+
+        def enriched_time(e):
+            be = e.get("browser_event") or {}
+            return be.get("created_at") or be.get("timestamp_start") or ""
+
+        sorted_events = sorted(raw_events, key=event_time, reverse=True)
+        sorted_enriched = sorted(enriched_events, key=enriched_time, reverse=True)
+
+        return {
+            "user_id": target_user_id,
+            "features": sanitize_doc(features),
+            "profile": sanitize_doc(profile),
+            "questionnaire_response": sanitize_doc(questionnaire),
+            "recent_events": sanitize_doc(sorted_events[:50]),
+            "recent_enriched_events": sanitize_doc(sorted_enriched[:50]),
+            "total_captured_events": len(raw_events)
+        }
+    except Exception as err:
+        logger.error(f"[Dashboard API] Error fetching dashboard data: {err}")
+        return JSONResponse(status_code=500, content={
+            "status": "failed",
+            "message": "Error fetching dashboard data",
+            "error": str(err)
+        })
+
+# --- QUESTIONNAIRE ENDPOINTS ---
+@app.post("/questionnaire/submit")
+@app.post("/api/questionnaire/submit")
+async def questionnaire_submit(payload: BfiSubmissionRequest, request: Request):
+    try:
+        user_id = payload.user_id
+        if not user_id:
+            token = request.cookies.get("auth_token")
+            if token:
+                auth_data = decode_jwt(token)
+                if auth_data and "user_id" in auth_data:
+                    user_id = auth_data["user_id"]
+
+        if not user_id or not user_id.strip():
+            return JSONResponse(status_code=400, content={
+                "status": "failed",
+                "error": "Missing or invalid user_id in request body."
+            })
+
+        if payload.questionnaire_type != "BFI-44":
+            return JSONResponse(status_code=400, content={
+                "status": "failed",
+                "error": f"Invalid questionnaire_type '{payload.questionnaire_type}'. Expected 'BFI-44'."
+            })
+
+        validation = validate_bfi44_responses(payload.responses)
+        if not validation["is_valid"]:
+            return JSONResponse(status_code=400, content={
+                "status": "failed",
+                "error": validation["error"]
+            })
+
+        formatted_responses = sorted(
+            [{"question_id": int(r["question_id"]), "score": int(r["score"])} for r in payload.responses],
+            key=lambda x: x["question_id"]
+        )
+
+        scores = calculate_bfi44_scores(formatted_responses)
+
+        questionnaire_doc = {
+            "user_id": user_id.strip(),
+            "questionnaire_type": "BFI-44",
+            "responses": formatted_responses,
+            "completed_at": datetime.utcnow().isoformat(),
+            "consent_version": payload.consent_version or "v1.0",
+            "status": "completed",
+            "scores": scores
+        }
+
+        if db is not None:
+            await db.questionnaire_responses.update_one(
+                {"user_id": user_id.strip(), "questionnaire_type": "BFI-44"},
+                {"$set": questionnaire_doc},
+                upsert=True
+            )
+
+        return {
+            "status": "success",
+            "message": "Questionnaire responses stored successfully",
+            "user_id": user_id.strip(),
+            "questionnaire_type": "BFI-44",
+            "completed_at": questionnaire_doc["completed_at"],
+            "consent_version": questionnaire_doc["consent_version"],
+            "scores": questionnaire_doc["scores"]
+        }
+    except Exception as error:
+        logger.error(f"[BFI-44 Endpoint] Error: {error}")
+        return JSONResponse(status_code=500, content={
+            "status": "failed",
+            "error": "Internal server error storing questionnaire response",
+            "details": str(error)
+        })
+
+@app.get("/questionnaire/response")
+@app.get("/api/questionnaire/response")
+async def get_dashboard(request: Request, user_id: Optional[str] = None):
+    target_user_id = user_id
+    if not target_user_id:
+        token = request.cookies.get("auth_token")
+        if token:
+            auth_data = decode_jwt(token)
+            if auth_data and "user_id" in auth_data:
+                target_user_id = auth_data["user_id"]
+
+    if not target_user_id:
+        return JSONResponse(status_code=400, content={"status": "failed", "error": "user_id is required"})
+
+    if db is None:
+        return JSONResponse(status_code=500, content={"status": "failed", "error": "Database unavailable"})
+
+    response_doc = await db.questionnaire_responses.find_one({
+        "user_id": target_user_id.strip(),
+        "questionnaire_type": "BFI-44"
+    })
+
+    if not response_doc:
+        return JSONResponse(status_code=404, content={
+            "status": "not_found",
+            "message": "No completed BFI-44 response found for user_id",
+            "user_id": target_user_id
+        })
+
+    return {
+        "status": "success",
+        "user_id": target_user_id,
+        "data": sanitize_doc(response_doc)
+    }
+
+# --- EXPORT TRAINING DATASET ---
+@app.get("/export-training-dataset")
+@app.get("/api/export-training-dataset")
+async def get_dashboard(request: Request, user_id: Optional[str] = None):
+    if db is None:
+        return JSONResponse(status_code=500, content={"status": "failed", "error": "Database unavailable"})
+
+    try:
+        all_user_features = await db.user_features.find({}).to_list(1000)
+        all_questionnaires = await db.questionnaire_responses.find({"questionnaire_type": "BFI-44"}).to_list(1000)
+        all_users = await db.users.find({}).to_list(1000)
+
+        user_ids = set()
+        features_map = {}
+        for uf in all_user_features:
+            if uf.get("user_id"):
+                user_ids.add(uf["user_id"])
+                features_map[uf["user_id"]] = uf
+
+        questionnaires_map = {}
+        for q in all_questionnaires:
+            if q.get("user_id"):
+                user_ids.add(q["user_id"])
+                questionnaires_map[q["user_id"]] = q
+
+        for u in all_users:
+            if u.get("user_id"):
+                user_ids.add(u["user_id"])
+
+        dataset_rows = []
+        for uid in user_ids:
+            feat = features_map.get(uid)
+            quest = questionnaires_map.get(uid)
+
+            ocean_scores = quest.get("scores") if quest else None
+            if not ocean_scores and quest and quest.get("responses"):
+                ocean_scores = calculate_bfi44_scores(quest["responses"])
+
+            row = {
+                "user_id": uid,
+                "avg_session_duration": round(feat.get("avg_session_duration", 0), 2) if feat else 0,
+                "late_night_ratio": round(feat.get("late_night_ratio", 0), 3) if feat else 0,
+                "topic_diversity": round(feat.get("topic_diversity", 0), 3) if feat else 0,
+                "learning_ratio": round(feat.get("learning_ratio", 0), 3) if feat else 0,
+                "activity_consistency": round(feat.get("activity_consistency", 0), 3) if feat else 0,
+                "openness": ocean_scores.get("openness", "") if ocean_scores else "",
+                "conscientiousness": ocean_scores.get("conscientiousness", "") if ocean_scores else "",
+                "extraversion": ocean_scores.get("extraversion", "") if ocean_scores else "",
+                "agreeableness": ocean_scores.get("agreeableness", "") if ocean_scores else "",
+                "neuroticism": ocean_scores.get("neuroticism", "") if ocean_scores else ""
+            }
+            dataset_rows.append(row)
+
+        csv_headers = [
+            "user_id", "avg_session_duration", "late_night_ratio", "topic_diversity",
+            "learning_ratio", "activity_consistency", "openness", "conscientiousness",
+            "extraversion", "agreeableness", "neuroticism"
+        ]
+
+        csv_lines = [",".join(csv_headers)]
+        for r in dataset_rows:
+            csv_lines.append(",".join(str(r.get(h, "")) for h in csv_headers))
+
+        csv_content = "\n".join(csv_lines) + "\n"
+
+        csv_file_path = os.path.join(os.getcwd(), "training_dataset.csv")
+        with open(csv_file_path, "w", encoding="utf-8") as f:
+            f.write(csv_content)
+
+        if format == "json":
+            return {
+                "status": "success",
+                "count": len(dataset_rows),
+                "file_path": "training_dataset.csv",
+                "data": dataset_rows
+            }
+
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="training_dataset.csv"'}
+        )
+    except Exception as error:
+        logger.error(f"[Export Dataset] Error: {error}")
+        return JSONResponse(status_code=500, content={
+            "status": "failed",
+            "error": "Internal server error exporting dataset",
+            "details": str(error)
+        })
+
+# --- DOWNLOAD EXTENSION & PAIRING ---
+@app.get("/download-extension")
+@app.get("/api/download-extension")
+async def download_extension():
+    extension_dir = os.path.join(os.getcwd(), "extension")
+    if not os.path.exists(extension_dir):
+        return JSONResponse(status_code=404, content={"status": "failed", "error": "Extension package directory not found"})
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(extension_dir):
+            for file in files:
+                abs_file = os.path.join(root, file)
+                rel_file = os.path.relpath(abs_file, extension_dir)
+                zf.write(abs_file, rel_file)
+
+    buffer.seek(0)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="ethos-chrome-extension.zip"'}
+    )
+
+@app.get("/api/auth/extension-token")
+async def get_dashboard(request: Request, user_id: Optional[str] = None):
+    target_user_id = user_id
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        try:
+            decoded = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            target_user_id = decoded.get("user_id", target_user_id)
+        except Exception:
+            pass
+
+    if not target_user_id:
+        return JSONResponse(status_code=401, content={"status": "failed", "error": "Authentication required"})
+
+    pairing_token = "pt_" + uuid4().hex
+    pairing_tokens[pairing_token] = {
+        "user_id": target_user_id,
+        "expires_at": time.time() + 300
+    }
+
+    return {
+        "status": "success",
+        "pairing_token": pairing_token,
+        "expires_in": 300,
+        "user_id": target_user_id
+    }
+
+@app.post("/api/extension/register")
+async def register_extension(payload: ExtensionRegisterRequest):
+    token = payload.pairing_token
+    if not token or token not in pairing_tokens:
+        return JSONResponse(status_code=400, content={"status": "failed", "error": "Invalid or expired pairing token"})
+
+    data = pairing_tokens[token]
+    if time.time() > data["expires_at"]:
+        del pairing_tokens[token]
+        return JSONResponse(status_code=400, content={"status": "failed", "error": "Pairing token expired"})
+
+    target_user_id = data["user_id"]
+    del pairing_tokens[token]
+
+    ext_token = jwt.encode(
+        {"user_id": target_user_id, "scope": "telemetry_ingest", "exp": datetime.utcnow() + timedelta(days=365)},
+        JWT_SECRET,
+        algorithm="HS256"
+    )
+
+    return {
+        "status": "success",
+        "message": "Extension auto-linked successfully",
+        "user_id": target_user_id,
+        "extension_auth_token": ext_token
+    }
+
+# --- ML PIPELINE ENDPOINTS ---
+@app.post("/api/ml/train")
+@app.get("/api/ml/train")
+async def train_ml_model():
+    ml_script = os.path.join(os.getcwd(), "ml", "train_personality_model.py")
+    cmd = f"python3 {ml_script} /ml training_dataset.csv"
+    logger.info(f"[ML Pipeline] Executing: {cmd}")
+
+    try:
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if proc.returncode != 0:
+            return JSONResponse(status_code=500, content={
+                "status": "failed",
+                "error": "ML training execution failed",
+                "details": proc.stderr,
+                "output": proc.stdout
+            })
+
+        history_path = os.path.join(os.getcwd(), "ml", "training_history.json")
+        history_data = None
+        if os.path.exists(history_path):
+            try:
+                with open(history_path, "r") as f:
+                    history_data = json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not parse training_history.json: {e}")
+
+        return {
+            "status": "success",
+            "message": "TensorFlow personality model trained successfully",
+            "output": proc.stdout,
+            "artifacts": [
+                "/ml/personality_model.keras",
+                "/ml/scaler.pkl",
+                "/ml/training_history.json",
+                "/ml/training_loss.png",
+                "/ml/training_mae.png"
+            ],
+            "results": history_data
+        }
+    except Exception as error:
+        return JSONResponse(status_code=500, content={"status": "failed", "error": str(error)})
+
+@app.get("/api/ml/metrics")
+async def get_ml_metrics():
+    history_path = os.path.join(os.getcwd(), "ml", "training_history.json")
+    if not os.path.exists(history_path):
+        return JSONResponse(status_code=404, content={"status": "error", "message": "No model training metrics found. Please trigger model training."})
+    try:
+        with open(history_path, "r") as f:
+            history_data = json.load(f)
+        return {"status": "success", "data": history_data}
+    except Exception as error:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(error)})
+
+@app.post("/api/ml/predict")
+async def ml_predict(payload: Optional[MlPredictRequest] = Body(None)):
+    user_id = payload.user_id if payload else None
+    feature_payload = payload.features if payload else None
+
+    if not feature_payload and user_id and db is not None:
+        user_feat = await db.user_features.find_one({"user_id": user_id})
+        if user_feat:
+            feature_payload = {
+                "avg_session_duration": user_feat.get("avg_session_duration", 0),
+                "late_night_ratio": user_feat.get("late_night_ratio", 0),
+                "topic_diversity": user_feat.get("topic_diversity", 0),
+                "learning_ratio": user_feat.get("learning_ratio", 0),
+                "activity_consistency": user_feat.get("activity_consistency", 0)
+            }
+
+    if not feature_payload:
+        return JSONResponse(status_code=400, content={"status": "failed", "error": "Missing feature vector or valid user_id"})
+
+    predict_script = os.path.join(os.getcwd(), "ml", "predict.py")
+    json_arg = json.dumps(feature_payload).replace('"', '\\"')
+
+    try:
+        proc = subprocess.run(f'python3 {predict_script} "{json_arg}"', shell=True, capture_output=True, text=True)
+        if proc.returncode != 0:
+            return JSONResponse(status_code=500, content={"status": "failed", "error": proc.stderr or proc.stdout})
+
+        predictions = json.loads(proc.stdout.strip())
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "input_features": feature_payload,
+            "predictions": predictions
+        }
+    except Exception as error:
+        return JSONResponse(status_code=500, content={"status": "failed", "error": str(error)})
+
+@app.get("/ml/plot/loss")
+async def plot_loss():
+    plot_path = os.path.join(os.getcwd(), "ml", "training_loss.png")
+    if os.path.exists(plot_path):
+        return FileResponse(plot_path, media_type="image/png")
+    return Response(content="Loss plot not found", status_code=404)
+
+@app.get("/ml/plot/mae")
+async def plot_mae():
+    plot_path = os.path.join(os.getcwd(), "ml", "training_mae.png")
+    if os.path.exists(plot_path):
+        return FileResponse(plot_path, media_type="image/png")
+    return Response(content="MAE plot not found", status_code=404)
