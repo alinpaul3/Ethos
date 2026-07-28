@@ -576,7 +576,18 @@ export function Dashboard({ user }: DashboardProps) {
               ) : (
                 <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
                   <div className="max-h-96 overflow-y-auto divide-y divide-slate-100">
-                    {recentEvents.map((e: any, i: number) => (
+                    {recentEvents.map((e: any, i: number) => {
+                      const matchingEnriched = recentEnrichedEvents.find((ee: any) => {
+                        const enrichedUrl = ee.browser_event?.url || "";
+                        if (!enrichedUrl || !e.url) return false;
+                        if (enrichedUrl === e.url) return true;
+                        const v1 = e.url.match(/[?&]v=([^&]+)/)?.[1];
+                        const v2 = enrichedUrl.match(/[?&]v=([^&]+)/)?.[1];
+                        return Boolean(v1 && v2 && v1 === v2);
+                      });
+                      const displayTitle = matchingEnriched?.youtube_metadata?.official_title || e.content_title || "YouTube Event";
+
+                      return (
                       <div key={i} className="p-4 flex items-center justify-between text-xs hover:bg-slate-50 transition-colors">
                         <div className="space-y-0.5 min-w-0 pr-4">
                           <p className="font-semibold text-slate-900 truncate">{e.content_title}</p>
@@ -589,7 +600,8 @@ export function Dashboard({ user }: DashboardProps) {
                           <span className="text-[9px] font-mono text-slate-400 block">{new Date(e.created_at || e.timestamp_start).toLocaleTimeString()}</span>
                         </div>
                       </div>
-                    ))}
+                    );
+                    })}
                   </div>
                 </div>
               )}

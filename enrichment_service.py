@@ -85,6 +85,14 @@ async def enrich_event_pipeline(event_data: dict, db=None) -> dict:
             # Insert the newly enriched document into the 'enriched_events' collection
             await db.enriched_events.insert_one(enriched_doc)
             print(f"Stored final enriched event in MongoDB 'enriched_events' collection for user {user_id}")
+              
+            # Update matching raw events with official title
+            official_title = youtube_metadata.get("official_title") if youtube_metadata else None
+            if official_title and official_title not in ["Unknown YouTube Video", "YouTube Video"]:
+                await db.raw_events.update_many(
+                    {"user_id": user_id, "url": url},
+                    {"$set": {"content_title": official_title}}
+                )
         except Exception as e:
             print(f"Failed to store enriched event in MongoDB: {e}")
             

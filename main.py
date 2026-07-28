@@ -984,6 +984,27 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
         raw_events = await db.raw_events.find({"user_id": target_user_id}).to_list(1000)
         enriched_events = await db.enriched_events.find({"user_id": target_user_id}).to_list(1000)
 
+# Build map of url / video_id -> official_title from enriched_events
+        official_title_map = {}
+        for ee in enriched_events:
+            e_url = (ee.get("browser_event") or {}).get("url") or ""
+            e_title = (ee.get("youtube_metadata") or {}).get("official_title")
+            if e_url and e_title and e_title not in ["Unknown YouTube Video", "YouTube Video"]:
+                official_title_map[e_url] = e_title
+                if "v=" in e_url:
+                    vid = e_url.split("v=")[1].split("&")[0]
+                    if vid:
+                        official_title_map[vid] = e_title
+
+        for re in raw_events:
+            r_url = re.get("url") or ""
+            if r_url in official_title_map:
+                re["content_title"] = official_title_map[r_url]
+            elif "v=" in r_url:
+                vid = r_url.split("v=")[1].split("&")[0]
+                if vid in official_title_map:
+                    re["content_title"] = official_title_map[vid]
+                    
         def event_time(e):
             return e.get("created_at") or e.get("timestamp_start") or ""
 

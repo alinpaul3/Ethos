@@ -1385,6 +1385,31 @@ async function startServer() {
       const events = await collections.raw_events.find({ user_id }).toArray();
       const enrichedEvents = await collections.enriched_events.find({ user_id }).toArray();
 
+      // Build official title map
+      const officialTitleMap: Record<string, string> = {};
+      for (const ee of enrichedEvents) {
+        const url = ee.browser_event?.url || "";
+        const title = ee.youtube_metadata?.official_title;
+        if (url && title && title !== "Unknown YouTube Video" && title !== "YouTube Video") {
+          officialTitleMap[url] = title;
+          const match = url.match(/[?&]v=([^&]+)/);
+          if (match && match[1]) {
+            officialTitleMap[match[1]] = title;
+          }
+        }
+      }
+
+      for (const re of events) {
+        if (re.url && officialTitleMap[re.url]) {
+          re.content_title = officialTitleMap[re.url];
+        } else if (re.url) {
+          const match = re.url.match(/[?&]v=([^&]+)/);
+          if (match && match[1] && officialTitleMap[match[1]]) {
+            re.content_title = officialTitleMap[match[1]];
+          }
+        }
+      }
+      
       // Sort events by timestamp or created_at (descending)
       const sortedEvents = events.sort((a: any, b: any) => {
         const timeA = new Date(a.created_at || a.timestamp_start || 0).getTime();
