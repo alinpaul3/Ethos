@@ -35,13 +35,18 @@ function safeSendMessage(message, callback) {
 if (location.hostname.includes("youtube.com")) {
   // YouTube watch tracking logic
   function getTitle() {
-    const ogTitle = document.querySelector('meta[property="og:title"]');
-    if (ogTitle) return ogTitle.content.replace(" - YouTube", "").trim();
+     // Do NOT use og:title meta tag as YouTube SPA never updates it on internal navigation
+    const h1 = document.querySelector('h1.style-scope.ytd-watch-metadata yt-formatted-string, #title h1, h1.ytd-watch-metadata, h1.title.ytd-video-primary-info-renderer, ytd-watch-metadata #title');
+    if (h1 && h1.innerText && h1.innerText.trim()) {
+      return h1.innerText.replace(" - YouTube", "").trim();
+    }
     
-    const h1 = document.querySelector('h1.style-scope.ytd-watch-metadata yt-formatted-string');
-    if (h1) return h1.innerText.replace(" - YouTube", "").trim();
-    
-    return document.title.replace(" - YouTube", "").trim();
+    const docTitle = document.title.replace(" - YouTube", "").trim();
+    if (docTitle && docTitle.toLowerCase() !== "youtube") {
+      return docTitle;
+    }
+
+    return "";;
   }
 
   let lastUrl = location.href;
@@ -58,6 +63,8 @@ if (location.hostname.includes("youtube.com")) {
   }
 
   function notifyStart() {
+    // Delay slightly to allow YouTube SPA to finish DOM title updates on new video load
+    setTimeout(() => {
     const title = getTitle();
     if (title) {
       safeSendMessage({
@@ -66,6 +73,7 @@ if (location.hostname.includes("youtube.com")) {
         title: title
       });
     }
+    }, 1200);
   }
 
   function notifyStop() {
@@ -74,7 +82,7 @@ if (location.hostname.includes("youtube.com")) {
 
   // Initial detection
   if (location.href.includes("youtube.com/watch")) {
-    setTimeout(notifyStart, 2000);
+    setTimeout(notifyStart, 1500);
   }
 
   // Watch for navigation within YouTube SPA

@@ -31,12 +31,10 @@ def extract_video_id(url: str) -> Optional[str]:
 
 async def fetch_youtube_metadata(video_id: str, content_title: str) -> dict:
     api_key = os.getenv("YOUTUBE_API_KEY")
-    if not api_key:
-        print("YOUTUBE_API_KEY is not defined. Using fallback metadata.")
-        return create_fallback_metadata(video_id, content_title)
+    if api_key:
 
-    url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id={video_id}&key={api_key}"
-    try:
+      url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id={video_id}&key={api_key}"
+      try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url)
             if response.status_code == 200:
@@ -72,10 +70,39 @@ async def fetch_youtube_metadata(video_id: str, content_title: str) -> dict:
                             "comment_count": int(statistics.get("commentCount", 0))
                         }
                     }
-                else:
-                    print(f"Video {video_id} not found or is private. Using fallback metadata.")
-            else:
-                print(f"YouTube Data API error: Status code {response.status_code}. Using fallback metadata.")
+      except Exception as e:
+        print(f"oEmbed fetch error for video {video_id}: {e}")
+
+    # Fallback / Keyless YouTube oEmbed fetch
+    return await fetch_oembed_metadata(video_id, content_title)
+
+async def fetch_oembed_metadata(video_id: str, content_title: str) -> dict:
+    oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(oembed_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                official_title = data.get("title") or content_title
+                channel_name = data.get("author_name") or "Unknown Channel"
+                cleaned_title = str(official_title).replace(" - YouTube", "").strip()
+                return {
+                    "video_id": video_id,
+                    "official_title": cleaned_title or "Unknown YouTube Video",
+                    "description": f"YouTube video by {channel_name}",
+                    "channel_name": channel_name,
+                    "published_at": datetime.utcnow().isoformat() + "Z",
+                    "tags": [],
+                    "category_id": "24",
+                    "default_language": "en",
+                    "duration": "PT0S",
+                    "thumbnail_url": data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                    "statistics": {
+                        "view_count": 0,
+                        "like_count": 0,
+                        "comment_count": 0
+                    }
+                }
     except Exception as e:
         print(f"Error fetching YouTube metadata: {e}. Using fallback metadata.")
         

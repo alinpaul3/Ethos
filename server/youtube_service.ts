@@ -33,54 +33,82 @@ export function extractVideoId(url: string): string | null {
 
 export async function fetchYouTubeMetadata(videoId: string, contentTitle: string): Promise<YouTubeMetadata> {
   const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) {
-    console.warn("YOUTUBE_API_KEY is not defined. Using fallback metadata.");
-    return createFallbackMetadata(videoId, contentTitle);
+  if (apiKey) {
+    const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=${videoId}&key=${apiKey}`;
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        const data: any = await res.json();
+        const items = data.items || [];
+        if (items.length > 0) {
+          const item = items[0];
+          const snippet = item.snippet || {};
+          const contentDetails = item.contentDetails || {};
+          const statistics = item.statistics || {};
+          const thumbnails = snippet.thumbnails || {};
+          const thumbnailUrl = 
+            thumbnails.high?.url || 
+            thumbnails.medium?.url || 
+            thumbnails.default?.url || 
+            `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+          return {
+            video_id: videoId,
+            official_title: snippet.title || contentTitle,
+            description: snippet.description || "",
+            channel_name: snippet.channelTitle || "Unknown Channel",
+            published_at: snippet.publishedAt || new Date().toISOString(),
+            tags: snippet.tags || [],
+            category_id: snippet.categoryId || "24",
+            default_language: snippet.defaultLanguage || snippet.defaultAudioLanguage || "en",
+            duration: contentDetails.duration || "PT0S",
+            thumbnail_url: thumbnailUrl,
+            statistics: {
+              view_count: parseInt(statistics.viewCount || "0", 10),
+              like_count: parseInt(statistics.likeCount || "0", 10),
+              comment_count: parseInt(statistics.commentCount || "0", 10),
+            }
+          };
+        }
+      }
+    } catch (error) {
+      console.error(`Error fetching YouTube Data API metadata: ${error}`);
+    }
   }
 
-  const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=${videoId}&key=${apiKey}`;
+  // Fallback / Keyless YouTube oEmbed fetch
+  return await fetchOembedMetadata(videoId, contentTitle);
+}
+
+async function fetchOembedMetadata(videoId: string, contentTitle: string): Promise<YouTubeMetadata> {
+  const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
   try {
-    const res = await fetch(url);
+    const res = await fetch(oembedUrl);
     if (res.ok) {
       const data: any = await res.json();
-      const items = data.items || [];
-      if (items.length > 0) {
-        const item = items[0];
-        const snippet = item.snippet || {};
-        const contentDetails = item.contentDetails || {};
-        const statistics = item.statistics || {};
-        const thumbnails = snippet.thumbnails || {};
-        const thumbnailUrl = 
-          thumbnails.high?.url || 
-          thumbnails.medium?.url || 
-          thumbnails.default?.url || 
-          `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-
-        return {
-          video_id: videoId,
-          official_title: snippet.title || contentTitle,
-          description: snippet.description || "",
-          channel_name: snippet.channelTitle || "Unknown Channel",
-          published_at: snippet.publishedAt || new Date().toISOString(),
-          tags: snippet.tags || [],
-          category_id: snippet.categoryId || "24",
-          default_language: snippet.defaultLanguage || snippet.defaultAudioLanguage || "en",
-          duration: contentDetails.duration || "PT0S",
-          thumbnail_url: thumbnailUrl,
-          statistics: {
-            view_count: parseInt(statistics.viewCount || "0", 10),
-            like_count: parseInt(statistics.likeCount || "0", 10),
-            comment_count: parseInt(statistics.commentCount || "0", 10),
-          }
-        };
-      } else {
-        console.warn(`Video ${videoId} not found or is private. Using fallback metadata.`);
-      }
-    } else {
-      console.error(`YouTube Data API returned status ${res.status}. Using fallback metadata.`);
+      const officialTitle = data.title || contentTitle;
+      const channelName = data.author_name || "Unknown Channel";
+      const cleanedTitle = String(officialTitle).replace(" - YouTube", "").trim();
+      return {
+        video_id: videoId,
+        official_title: cleanedTitle || "Unknown YouTube Video",
+        description: `YouTube video by ${channelName}`,
+        channel_name: channelName,
+        published_at: new Date().toISOString(),
+        tags: [],
+        category_id: "24",
+        default_language: "en",
+        duration: "PT0S",
+        thumbnail_url: data.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        statistics: {
+          view_count: 0,
+          like_count: 0,
+          comment_count: 0
+        }
+      };
     }
-  } catch (error) {
-    console.error(`Error fetching YouTube metadata: ${error}. Using fallback metadata.`);
+  } catch (err) {
+    console.error(`oEmbed fetch error for video ${videoId}:`, err);
   }
 
   return createFallbackMetadata(videoId, contentTitle);
