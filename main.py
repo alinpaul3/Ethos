@@ -502,6 +502,7 @@ async def verify_extension(payload: ExtensionVerifyRequest, current_user: dict =
 
 # --- PHASE 3: EVENT STORAGE ---
 @app.post("/events")
+@app.post("/api/events")
 async def store_event(event: EventPayload, background_tasks: BackgroundTasks):
     if db is None:
         raise HTTPException(status_code=503, detail="Database unavailable")

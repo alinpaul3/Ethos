@@ -7,7 +7,7 @@ import { ExtensionConnectPage } from "./pages/ExtensionConnectPage";
 import { QuestionnairePage } from "./pages/QuestionnairePage";
 import { Dashboard } from "./pages/Dashboard";
 import { Layout } from "./components/Layout";
-import { apiFetch } from "./lib/api";
+import { apiFetch, API_BASE_URL } from "./lib/api";
 interface User {
   user_id: string;
   email: string;
@@ -50,6 +50,22 @@ export default function App() {
     checkAuthAndConsent();
   }, []);
 
+  
+  useEffect(() => {
+    if (user?.user_id) {
+      const backendBaseUrl = API_BASE_URL || (window.location.hostname.includes("ethos-analysis.onrender.com") ? "https://ethos-i8i4.onrender.com" : window.location.origin);
+      const serverUrl = `${backendBaseUrl.replace(/\/$/, "")}/events`;
+      (window as any).ETHOS_API_BASE_URL = backendBaseUrl;
+
+      // Broadcast linkage request to Chrome Extension content script
+      window.postMessage({
+        type: "ETHOS_CONNECT_REQUEST",
+        user_id: user.user_id,
+        server_url: serverUrl
+      }, "*");
+    }
+  }, [user]);
+  
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#FDFCFB]">

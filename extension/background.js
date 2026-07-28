@@ -1,7 +1,6 @@
 let currentSession = null;
 const MOCK_USER_ID = "U123_TEST";
-const DEFAULT_SERVER_URL = "https://ais-pre-n2ycjjeekyew6sh6nvvtzu-589922721576.asia-east1.run.app/events";
-
+const DEFAULT_SERVER_URL = "https://ethos-i8i4.onrender.com/events";
 let activeUserId = MOCK_USER_ID;
 let activeServerUrl = DEFAULT_SERVER_URL;
 

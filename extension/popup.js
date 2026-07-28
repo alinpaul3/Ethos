@@ -12,7 +12,7 @@ function updateUI() {
       statusDiv.className = "status inactive";
     }
     if (userIdEl) userIdEl.innerText = "Current Sync ID:\nU123_TEST (Guest)";
-    if (serverUrlEl) serverUrlEl.innerText = "Server:\nhttps://ais-pre-n2ycjjeekyew6sh6nvvtzu-589922721576.asia-east1.run.app/events";
+    if (serverUrlEl) serverUrlEl.innerText = "Server:\nhttps://ethos-i8i4.onrender.com/events";
     return;
   }
 
@@ -29,7 +29,7 @@ function updateUI() {
           userIdEl.innerText = "Current Sync ID:\n" + uid;
         }
 
-        const currentServer = (result && result.server_url) || "https://ais-pre-n2ycjjeekyew6sh6nvvtzu-589922721576.asia-east1.run.app/events";
+        const currentServer = (result && result.server_url) || "https://ethos-i8i4.onrender.com/events";
         if (serverUrlEl) {
           serverUrlEl.innerText = "Server:\n" + currentServer;
         }
@@ -125,7 +125,7 @@ if (saveBtn) {
           }
 
           if (!serverUrl) {
-            serverUrl = "https://ais-pre-n2ycjjeekyew6sh6nvvtzu-589922721576.asia-east1.run.app/events";
+             serverUrl = "https://ethos-i8i4.onrender.com/events";
           }
 
           const payload = { 

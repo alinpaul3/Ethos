@@ -92,6 +92,18 @@ if (location.hostname.includes("youtube.com")) {
   // Application page connection bridge
   console.log("Ethos content script loaded on application page. Listening for node linkage...");
   
+  function getBackendEventsUrl() {
+    if (typeof window !== "undefined") {
+      if (window.ETHOS_API_BASE_URL) {
+        return `${window.ETHOS_API_BASE_URL.replace(/\/$/, "")}/events`;
+      }
+      if (window.location.hostname.includes("ethos-analysis.onrender.com")) {
+        return "https://ethos-i8i4.onrender.com/events";
+      }
+    }
+    return "/events";
+  }
+
   // Establish persistent port connection (extremely robust for iframes and cross-frame syncing)
   if (typeof chrome !== "undefined" && chrome.runtime) {
     try {
@@ -101,7 +113,7 @@ if (location.hostname.includes("youtube.com")) {
         if (message.type === "FORWARD_EVENT") {
           console.log("Forwarding event from background script via persistent port:", message.payload);
           
-          fetch("/events", {
+          fetch(getBackendEventsUrl(), {
             method: "POST",
             headers: {
               "Content-Type": "application/json"
@@ -134,7 +146,7 @@ if (location.hostname.includes("youtube.com")) {
         console.log("Forwarding event from background script via backup tabs.sendMessage:", message.payload);
         
         // Fetch from the page's own context to bypass any proxy auth/same-site cookie restrictions
-        fetch("/events", {
+        fetch(getBackendEventsUrl(), {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
