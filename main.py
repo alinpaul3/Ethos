@@ -29,6 +29,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://ethos-analysis.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -283,12 +284,12 @@ async def login(response: Response, payload: LoginRequest):
         
     token = create_jwt(user["user_id"], user["email"])
     response.set_cookie(
-        key="auth_token",
-        value=token,
-        httponly=True,
-        max_age=7 * 24 * 60 * 60,
-        samesite="lax",
-        secure=False
+       key="auth_token",
+       value=token,
+       httponly=True,
+       max_age=7 * 24 * 60 * 60,
+       samesite="none",
+       secure=True
     )
     
     return {"user_id": user["user_id"], "email": user["email"]}
