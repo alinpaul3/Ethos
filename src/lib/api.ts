@@ -1,5 +1,5 @@
 // Centralized API helper for network requests
-// Reads the backend base URL from VITE_API_BASE_URL if set (e.g. https://your-backend.onrender.com)
+// Reads the backend base URL from VITE_API_BASE_URL if set (e.g. https://ethos-i8i4.onrender.com)
 const RAW_BASE_URL = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_BASE_URL || '';
 export const API_BASE_URL = RAW_BASE_URL.endsWith('/') ? RAW_BASE_URL.slice(0, -1) : RAW_BASE_URL;
 
@@ -8,6 +8,7 @@ export const API_BASE_URL = RAW_BASE_URL.endsWith('/') ? RAW_BASE_URL.slice(0, -
  * 1. Automatically prepends the backend base URL (from VITE_API_BASE_URL)
  * 2. Automatically includes `credentials: "include"` for cookies/session handling
  * 3. Sets default `Content-Type: application/json` header unless sending FormData
+ * 4. Strictly sends requests to API_BASE_URL without any silent retry or fallback to localhost/relative path.
  */
 export async function apiFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
@@ -24,15 +25,9 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     headers,
   };
 
- try {
+ 
     return await fetch(url, config);
-  } catch (err) {
-    if (API_BASE_URL && url !== normalizedEndpoint) {
-      console.warn(`apiFetch failed for ${url}, falling back to relative path ${normalizedEndpoint}`, err);
-      return await fetch(normalizedEndpoint, config);
-    }
-    throw err;
+ 
   }
-}
 
 export default apiFetch;

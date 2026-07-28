@@ -28,18 +28,20 @@ export default function App() {
           const userData = await authRes.json();
           setUser(userData);
           
+          try{
           const consentRes = await apiFetch(`/api/consent-status?user_id=${userData.user_id}`);
           const consentContentType = consentRes.headers.get("content-type");
           if (consentRes.ok && consentContentType && consentContentType.includes("application/json")) {
             const consentData = await consentRes.json();
             setConsentGiven(consentData.consent_given);
+            }
+          } catch (consentErr) {
+            console.warn("Consent check error:", consentErr);
           }
         } else {
-          console.warn("Initial auth failed or returned non-JSON:", authRes.status);
           setUser(null);
         }
       } catch (err) {
-        console.error("Auth check error:", err);
         setUser(null);
       } finally {
         setLoading(false);

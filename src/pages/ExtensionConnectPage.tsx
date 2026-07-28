@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Chrome, Copy, Check, Link as LinkIcon, AlertCircle, Download, ExternalLink, ArrowRight, Sparkles, CheckCircle2, ShieldCheck, Zap, Radio, Layers, Server, RefreshCw, HelpCircle, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { apiFetch } from "../lib/api";
+import { apiFetch, API_BASE_URL } from "../lib/api";
 interface ExtensionConnectPageProps {
   user: { user_id: string; email: string };
 }
@@ -267,7 +267,7 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
 
             <div className="flex flex-col sm:flex-row items-center gap-4 pt-1">
               <a
-                href="/download-extension"
+                href={`${API_BASE_URL ? API_BASE_URL : ""}/download-extension`}
                 download="ethos-chrome-extension.zip"
                 className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-mono text-xs font-semibold uppercase tracking-wider transition-all border border-slate-200 flex items-center justify-center gap-2 cursor-pointer"
               >

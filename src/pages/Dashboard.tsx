@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Activity, Clock, Database, Info, RefreshCw, Compass, Shield, Award, Brain, Tag, ChevronDown, ChevronUp, Play, Sparkles, Zap, Download, Layers, ArrowUpRight, BarChart3, Radio, CheckCircle2, Cpu, FileText, ShieldCheck, Chrome, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
-import { apiFetch } from "../lib/api";
+import { apiFetch, API_BASE_URL } from "../lib/api";
 interface DashboardProps {
   user: { user_id: string; email: string };
 }
@@ -679,7 +679,7 @@ export function Dashboard({ user }: DashboardProps) {
             {/* Pipeline Actions */}
             <div className="pt-4 border-t border-slate-800 space-y-2">
               <a
-                href="/export-training-dataset"
+                href={`${API_BASE_URL ? API_BASE_URL : ""}/export-training-dataset`}
                 download="training_dataset.csv"
                 className="w-full py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-emerald-400 text-xs font-mono font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
               >
