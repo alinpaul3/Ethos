@@ -12,8 +12,10 @@
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://*.asia-east1.run.app/*",
+    "https://*.run.app/*",
     "http://localhost/*",
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
@@ -23,8 +25,10 @@
       "matches": [
         "https://www.youtube.com/*",
         "https://*.asia-east1.run.app/*",
+        "https://*.run.app/*",
         "http://localhost/*",
-        "http://127.0.0.1/*"
+        "http://127.0.0.1/*",
+        "<all_urls>"
       ],
       "js": ["content.js"],
       "all_frames": true

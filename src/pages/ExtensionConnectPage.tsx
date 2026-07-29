@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Chrome, Copy, Check, Link as LinkIcon, AlertCircle, Download, ExternalLink, ArrowRight, Sparkles, CheckCircle2, ShieldCheck, Zap, Radio, Layers, Server, RefreshCw, HelpCircle, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { apiFetch, API_BASE_URL } from "../lib/api";
+
 interface ExtensionConnectPageProps {
   user: { user_id: string; email: string };
 }
@@ -253,34 +254,70 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
           </div>
 
           {/* Developer / Manual Fallback Box */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <Download className="w-4 h-4 text-slate-500" />
-                <h3 className="text-sm font-bold text-slate-900">Developer & Offline Zip Package (Fallback)</h3>
+                <Download className="w-4 h-4 text-amber-600" />
+                <h3 className="text-sm font-bold text-slate-900">Developer & Offline Zip Package</h3>
               </div>
-              <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full">For Testers</span>
+              <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full font-semibold">Unpacked Chrome Extension</span>
             </div>
+            
             <p className="text-xs text-slate-600 leading-relaxed">
-              For local offline testing or developer evaluation, you can still download the raw unpacked extension zip file.
+              If you are testing the raw unpacked ZIP download, follow these steps to ensure Chrome loads the content script properly:
             </p>
 
-            <div className="flex flex-col sm:flex-row items-center gap-4 pt-1">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
+                <span className="text-[10px] font-mono text-amber-700 font-bold uppercase">Step 1: Download & Unzip</span>
+                <p className="text-xs text-slate-700">Download <code className="text-[11px] bg-slate-200 px-1 py-0.5 rounded">ethos-chrome-extension.zip</code> and extract it to a folder on your computer.</p>
+              </div>
+
+              <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
+                <span className="text-[10px] font-mono text-cyan-700 font-bold uppercase">Step 2: Load in Chrome</span>
+                <p className="text-xs text-slate-700">Go to <code className="text-[11px] bg-slate-200 px-1 py-0.5 rounded">chrome://extensions</code>, turn on <strong>Developer mode</strong>, click <strong>Load unpacked</strong> and select the unzipped folder.</p>
+              </div>
+
+              <div className="p-3.5 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-1">
+                <span className="text-[10px] font-mono text-amber-800 font-bold uppercase">Step 3: Refresh Active Tabs</span>
+                <p className="text-xs text-amber-900 font-semibold">⚠️ Important: Refresh this web app page and any open YouTube tabs so Chrome injects the new extension script into active pages.</p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-100">
               <a
                 href={`${API_BASE_URL ? API_BASE_URL : ""}/download-extension`}
                 download="ethos-chrome-extension.zip"
-                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-mono text-xs font-semibold uppercase tracking-wider transition-all border border-slate-200 flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-mono text-xs font-bold uppercase tracking-wider transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
               >
-                <Download className="w-3.5 h-3.5 text-slate-600" />
+                <Download className="w-3.5 h-3.5 text-slate-950" />
                 Download Raw ZIP
               </a>
 
-              <div className="flex items-center gap-2 text-xs font-mono text-slate-500 truncate">
-                <span>Subject Key:</span>
-                <code className="bg-slate-100 px-2 py-1 rounded text-slate-800 font-bold">{user.user_id}</code>
-                <button onClick={copyId} className="text-amber-600 hover:underline cursor-pointer">
-                  {copied ? "Copied" : "Copy"}
+              <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                <button
+                  onClick={() => {
+                    const backendBaseUrl = API_BASE_URL || window.location.origin;
+                    window.postMessage({
+                      type: "ETHOS_CONNECT_REQUEST",
+                      user_id: user.user_id,
+                      server_url: `${backendBaseUrl.replace(/\/$/, "")}/events`
+                    }, "*");
+                    handleDetectExtension();
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-mono text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-xs"
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-400" />
+                  Sync Extension to Account Now
                 </button>
+
+                <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-slate-500">
+                  <span>ID:</span>
+                  <code className="bg-slate-100 px-2 py-1 rounded text-slate-800 font-bold">{user.user_id}</code>
+                  <button onClick={copyId} className="text-amber-600 hover:underline cursor-pointer">
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

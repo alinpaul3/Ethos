@@ -101,12 +101,15 @@ if (location.hostname.includes("youtube.com")) {
   console.log("Ethos content script loaded on application page. Listening for node linkage...");
   
   function getBackendEventsUrl() {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && window.location) {
       if (window.ETHOS_API_BASE_URL) {
         return `${window.ETHOS_API_BASE_URL.replace(/\/$/, "")}/events`;
       }
       if (window.location.hostname.includes("ethos-analysis.onrender.com")) {
         return "https://ethos-i8i4.onrender.com/events";
+      }
+       if (window.location.origin && window.location.origin !== "null") {
+        return `${window.location.origin.replace(/\/$/, "")}/events`;
       }
     }
     return "/events";
@@ -181,6 +184,9 @@ if (location.hostname.includes("youtube.com")) {
   }
 
   window.addEventListener("message", (event) => {
+       if (event.data && event.data.type === "ETHOS_EXTENSION_PING") {
+      window.postMessage({ type: "ETHOS_EXTENSION_PONG" }, "*");
+    }
     if (event.data && event.data.type === "ETHOS_CONNECT_REQUEST") {
       const userId = event.data.user_id;
       let serverUrl = event.data.server_url;

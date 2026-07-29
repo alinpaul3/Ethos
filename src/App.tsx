@@ -53,6 +53,7 @@ export default function App() {
   
   useEffect(() => {
     if (user?.user_id) {
+      const broadcastConnect = () => {
       const backendBaseUrl = API_BASE_URL || (window.location.hostname.includes("ethos-analysis.onrender.com") ? "https://ethos-i8i4.onrender.com" : window.location.origin);
       const serverUrl = `${backendBaseUrl.replace(/\/$/, "")}/events`;
       (window as any).ETHOS_API_BASE_URL = backendBaseUrl;
@@ -63,6 +64,11 @@ export default function App() {
         user_id: user.user_id,
         server_url: serverUrl
       }, "*");
+      };
+
+      broadcastConnect();
+      const interval = setInterval(broadcastConnect, 3000);
+      return () => clearInterval(interval);
     }
   }, [user]);
   
