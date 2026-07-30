@@ -1,29 +1,26 @@
 from fastapi import FastAPI, HTTPException, Body, Request, Response, Depends, Cookie, BackgroundTasks, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, FileResponse, Response
 from pydantic import BaseModel, HttpUrl, EmailStr
 from enrichment_service import enrich_event_pipeline
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timedelta, date
 import os
-from fastapi.responses import JSONResponse, FileResponse, Response
 import httpx
 import logging
 import statistics
 import re
-import jwt
 import math
+import jwt
 import bcrypt
-from uuid import uuid4
-from typing import List, Optional
-from dotenv import load_dotenv
-from fastapi.middleware.cors import CORSMiddleware
 import zipfile
 import io
 import subprocess
 import json
 import time
+from uuid import uuid4
 from typing import List, Optional, Dict, Any
 
-load_dotenv()
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +41,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # Configuration
 MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
@@ -55,7 +53,7 @@ N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 
 # MongoDB Client
 client = AsyncIOMotorClient(MONGODB_URI) if MONGODB_URI else None
-db = client.get_database() if client else None
+db = client.get_database() if client is not None else None
 
 # --- AUTH HELPERS ---
 def hash_password(password: str) -> str:
@@ -77,30 +75,31 @@ def create_jwt(user_id: str, email: str) -> str:
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
-# def decode_jwt(token: str) -> Optional[dict]:
-#     try:
-#         return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-#     except Exception:
-#         return None
-
 def decode_jwt(token: str) -> Optional[dict]:
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        print("JWT decoded successfully:", payload)
-        return payload
-
-    except Exception as e:
-        print("JWT ERROR:", type(e).__name__, str(e))
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except Exception:
         return None
 
-# async def get_current_user(request: Request):
-#     token = request.cookies.get("auth_token")
-#     if not token:
-#         raise HTTPException(status_code=401, detail="Authentication required")
-#     payload = decode_jwt(token)
-#     if not payload:
-#         raise HTTPException(status_code=403, detail="Invalid or expired token")
-#     return payload
+def safe_float(val, default=0.0):
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return default
+        return f
+    except (ValueError, TypeError):
+        return default
+
+def safe_int(val, default=0):
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
 def sanitize_doc(doc):
     if doc is None:
         return None
@@ -109,34 +108,40 @@ def sanitize_doc(doc):
     if isinstance(doc, dict):
         new_doc = {}
         for k, v in doc.items():
-            if k == "_id":
+            if v is None:
+                new_doc[k] = None
+            elif k == "_id" or type(v).__name__ in ("ObjectId", "Decimal128"):
                 new_doc[k] = str(v)
             elif isinstance(v, (datetime, date)):
                 new_doc[k] = v.isoformat()
-            elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-                new_doc[k] = 0.0
+            elif isinstance(v, float):
+                if math.isnan(v) or math.isinf(v):
+                    new_doc[k] = 0.0
+                else:
+                    new_doc[k] = v
+            elif isinstance(v, (int, str, bool)):
+                new_doc[k] = v
             elif isinstance(v, (dict, list)):
                 new_doc[k] = sanitize_doc(v)
             else:
-                new_doc[k] = v
+                try:
+                    new_doc[k] = str(v)
+                except Exception:
+                    new_doc[k] = None
         return new_doc
+    if type(doc).__name__ in ("ObjectId", "Decimal128"):
+        return str(doc)
+    if isinstance(doc, (datetime, date)):
+        return doc.isoformat()
     return doc
 
 async def get_current_user(request: Request):
     token = request.cookies.get("auth_token")
-
-    print("TOKEN:", token)
-
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
-
     payload = decode_jwt(token)
-
-    print("PAYLOAD:", payload)
-
     if not payload:
         raise HTTPException(status_code=403, detail="Invalid or expired token")
-
     return payload
 
 # --- PYDANTIC SCHEMAS ---
@@ -165,6 +170,7 @@ class EventPayload(BaseModel):
 
 class ProcessRequest(BaseModel):
     user_id: str
+
 class N8nTriggerRequest(BaseModel):
     user_id: Optional[str] = "test_user"
 
@@ -282,7 +288,6 @@ def calculate_bfi44_scores(responses: List[dict]) -> dict:
         }
     }
 
-
 @app.on_event("startup")
 async def startup_db_client():
     if not client:
@@ -295,10 +300,7 @@ async def shutdown_db_client():
 
 @app.get("/health")
 async def health():
-    return {
-        "status": "ok",
-        "db": "connected" if db is not None else "disconnected"
-    }
+    return {"status": "ok", "db": "connected" if db is not None else "disconnected"}
 
 @app.get("/api/ping")
 async def ping():
@@ -314,6 +316,7 @@ async def n8n_health():
         "webhook_url_set": is_configured,
         "timestamp": datetime.utcnow().isoformat()
     }
+
 @app.get("/api/n8n/status")
 @app.get("/n8n/status")
 async def n8n_status():
@@ -325,10 +328,10 @@ async def n8n_status():
         "webhook_url": N8N_WEBHOOK_URL if is_configured else None,
         "timestamp": datetime.utcnow().isoformat()
     }
+
 @app.post("/api/n8n/trigger")
 @app.post("/n8n/trigger")
 async def n8n_trigger(payload: Optional[N8nTriggerRequest] = Body(None)):
-    
     user_id = payload.user_id if payload and payload.user_id else "test_user"
     event_count = 0
     if db is not None:
@@ -336,19 +339,19 @@ async def n8n_trigger(payload: Optional[N8nTriggerRequest] = Body(None)):
             event_count = await db.raw_events.count_documents({"user_id": user_id})
         except Exception as db_err:
             logger.error(f"Error counting documents in raw_events: {db_err}")
-    
+
     trigger_payload = {
         "user_id": user_id,
         "event_count": event_count,
         "triggered_at": datetime.utcnow().isoformat()
-         }
+    }
 
     if not N8N_WEBHOOK_URL:
         return {
             "status": "unconfigured",
             "message": "N8N_WEBHOOK_URL is not set in environment variables",
             "payload_sent": trigger_payload
-    }
+        }
 
     try:
         async with httpx.AsyncClient() as httpx_client:
@@ -416,13 +419,13 @@ async def login(response: Response, payload: LoginRequest):
         
     token = create_jwt(user["user_id"], user["email"])
     response.set_cookie(
-       key="auth_token",
-       value=token,
-       httponly=True,
-       max_age=7 * 24 * 60 * 60,
-       samesite="none",
-       secure=True,
-       path="/"
+        key="auth_token",
+        value=token,
+        httponly=True,
+        max_age=7 * 24 * 60 * 60,
+        samesite="lax",
+        secure=False,
+        path="/"
     )
     
     return {"user_id": user["user_id"], "email": user["email"]}
@@ -522,46 +525,81 @@ async def store_event(event: EventPayload, background_tasks: BackgroundTasks):
     event_dict["url"] = str(event_dict["url"])
     event_dict["created_at"] = datetime.utcnow().isoformat()
     
-        # Deduplicate recent events for same video ID within 5 mins
+    # Enhanced deduplication for pause/play events & same video/title session (within 30 mins)
     def extract_vid(u):
+        if not u:
+            return None
         if "v=" in u:
             return u.split("v=")[1].split("&")[0]
+        if "youtu.be/" in u:
+            return u.split("youtu.be/")[1].split("?")[0].split("&")[0]
+        if "youtube.com/shorts/" in u:
+            return u.split("youtube.com/shorts/")[1].split("?")[0].split("&")[0]
+        if "youtube.com/embed/" in u:
+            return u.split("youtube.com/embed/")[1].split("?")[0].split("&")[0]
         return None
 
-    incoming_vid = extract_vid(event_dict["url"])
+    incoming_vid = extract_vid(event_dict.get("url", ""))
+    incoming_title = clean_title(event_dict.get("content_title", ""))
+
     recent_dup = None
-    if incoming_vid:
-        existing_user_events = await db.raw_events.find({"user_id": event.user_id}).to_list(100)
-        for e in existing_user_events:
-            e_vid = extract_vid(e.get("url", ""))
-            if e_vid and e_vid == incoming_vid:
-                e_time_str = e.get("created_at") or e.get("timestamp_start")
-                if e_time_str:
-                    try:
-                        e_time = datetime.fromisoformat(e_time_str.replace("Z", "+00:00"))
-                        now_time = datetime.utcnow()
-                        if abs((now_time - e_time.replace(tzinfo=None)).total_seconds()) < 300:
-                            recent_dup = e
-                            break
-                    except Exception:
-                        pass
+    existing_user_events = await db.raw_events.find({"user_id": event.user_id}).to_list(200)
+
+    def parse_event_time(e):
+        ts = e.get("updated_at") or e.get("timestamp_end") or e.get("created_at") or e.get("timestamp_start")
+        if not ts:
+            return 0.0
+        try:
+            if isinstance(ts, (datetime, date)):
+                return ts.timestamp()
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            return dt.timestamp()
+        except Exception:
+            return 0.0
+
+    sorted_existing = sorted(existing_user_events, key=parse_event_time, reverse=True)
+    now_ts = datetime.utcnow().timestamp()
+
+    for e in sorted_existing:
+        e_vid = extract_vid(e.get("url", ""))
+        e_title = clean_title(e.get("content_title", ""))
+
+        is_match = False
+        if incoming_vid and e_vid and incoming_vid == e_vid:
+            is_match = True
+        elif incoming_title and e_title and incoming_title == e_title:
+            is_match = True
+        elif event_dict.get("url") and e.get("url") and event_dict["url"].split("?")[0] == e["url"].split("?")[0]:
+            is_match = True
+
+        if is_match:
+            last_activity = parse_event_time(e)
+            # Match if last activity on this video session was within 30 minutes (1800s)
+            if (now_ts - last_activity < 1800) or last_activity == 0.0:
+                recent_dup = e
+                break
 
     if recent_dup:
-        new_dur = max(float(recent_dup.get("duration_seconds") or 0), float(event_dict.get("duration_seconds") or 0))
+        new_dur = max(safe_float(recent_dup.get("duration_seconds")), safe_float(event_dict.get("duration_seconds")))
+        update_fields = {
+            "duration_seconds": new_dur,
+            "timestamp_end": event_dict.get("timestamp_end") or datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        if event_dict.get("content_title"):
+            update_fields["content_title"] = event_dict["content_title"]
+
         await db.raw_events.update_one(
             {"_id": recent_dup["_id"]},
-            {"$set": {
-                "duration_seconds": new_dur,
-                "timestamp_end": event_dict["timestamp_end"],
-                "content_title": event_dict.get("content_title") or recent_dup.get("content_title")
-            }}
+            {"$set": update_fields}
         )
-        logger.info(f"Merged duplicate event for user {event.user_id}, video {incoming_vid}. New duration: {new_dur}s")
+        logger.info(f"Merged duplicate/pause watch event for user {event.user_id}, video/title '{incoming_title or incoming_vid}'. New duration: {new_dur}s")
     else:
-       await db.raw_events.insert_one(event_dict)
-       logger.info(f"Event stored for user {event.user_id}")
+        event_dict["updated_at"] = datetime.utcnow().isoformat()
+        await db.raw_events.insert_one(event_dict)
+        logger.info(f"Event stored for user {event.user_id}")
 
-    # Enqueue enrichment pipeline to collect, enrich, and store in background
+    # Enqueue enrichment pipeline & behavior profile generation in background
     background_tasks.add_task(enrich_event_pipeline, event_dict, db)
     background_tasks.add_task(process_data_for_user, event.user_id)
 
@@ -619,8 +657,9 @@ def get_sentiment_score(title: Any) -> float:
     return score
 
 async def process_data_for_user(user_id: str) -> Optional[dict]:
-    if not db:
+    if db is None:
         return None
+    
     try:
         cursor = db.raw_events.find({"user_id": user_id})
         events = await cursor.to_list(length=1000)
@@ -636,7 +675,7 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
             return None
 
         total_events = len(valid_events)
-        total_time = sum(float(e.get("duration_seconds", 0) or 0) for e in valid_events)
+        total_time = sum(safe_float(e.get("duration_seconds")) for e in valid_events)
         
         late_night = 0
         hours = []
@@ -657,21 +696,27 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
                 pass
         
         ln_ratio = late_night / total_events if total_events else 0.0
-        consistency = 1.0 - (statistics.stdev(hours) / 12.0) if len(hours) > 1 else 1.0
+        try:
+            consistency = 1.0 - (statistics.stdev(hours) / 12.0) if len(hours) > 1 else 1.0
+        except Exception:
+            consistency = 1.0
         consistency = max(0.0, min(1.0, consistency))
 
         all_titles = [clean_title(e.get("content_title") or e.get("url") or "") for e in valid_events]
         all_titles = [t for t in all_titles if t]
 
         meaningful_words = {w for t in all_titles for w in t.split() if len(w) > 3}
-        topic_div = len(meaningful_words) / (total_events + 1)
+        topic_div = len(meaningful_words) / (total_events + 1) if total_events else 0.0
 
         unique_titles = set(all_titles)
         repetitive = (sum(1 for t, c in {t: all_titles.count(t) for t in unique_titles}.items() if c > 1) / len(unique_titles)) if unique_titles else 0.0
 
         sent_scores = [get_sentiment_score(t) for t in all_titles] if all_titles else [0.0]
         avg_sent = sum(sent_scores) / len(sent_scores) if sent_scores else 0.0
-        sent_var = statistics.variance(sent_scores) if len(sent_scores) > 1 else 0.0
+        try:
+            sent_var = statistics.variance(sent_scores) if len(sent_scores) > 1 else 0.0
+        except Exception:
+            sent_var = 0.0
 
         features = {
             "user_id": user_id,
@@ -707,7 +752,7 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
 
 @app.post("/process-data")
 async def process_data(req: ProcessRequest):
-    if not db:
+    if db is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
     profile = await process_data_for_user(req.user_id)
     if not profile:
@@ -1060,9 +1105,11 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
         raw_events = await db.raw_events.find({"user_id": target_user_id}).to_list(1000)
         enriched_events = await db.enriched_events.find({"user_id": target_user_id}).to_list(1000)
 
-        # Auto-compute profile if missing but raw_events exist
+        # Auto-compute profile if missing or signals contain 'CALCULATING' while raw_events exist
         profile = await db.behavior_profiles.find_one({"user_id": target_user_id})
-        if not profile and raw_events:
+        signals_in_db = (profile.get("signals") or {}) if profile else {}
+        is_calc = not signals_in_db or any(str(v).upper() == "CALCULATING" for v in signals_in_db.values())
+        if (not profile or is_calc) and raw_events:
             profile = await process_data_for_user(target_user_id)
 
         features = await db.user_features.find_one({"user_id": target_user_id})
@@ -1104,7 +1151,7 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
 
         if raw_events:
             valid_raw = [e for e in raw_events if isinstance(e, dict)]
-            total_time = sum(float(e.get("duration_seconds") or 0) for e in valid_raw)
+            total_time = sum(safe_float(e.get("duration_seconds")) for e in valid_raw)
             avg_dur = total_time / len(valid_raw) if valid_raw else 0.0
             sent_scores = [get_sentiment_score(e.get("content_title") or "") for e in valid_raw]
             avg_sent = (sum(sent_scores) / len(valid_raw)) if valid_raw else 0.0
@@ -1123,8 +1170,8 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
                     "processed_at": datetime.utcnow().isoformat()
                 }
             else:
-                features["total_watch_time"] = max(float(features.get("total_watch_time") or 0), total_time)
-                features["total_events"] = max(int(features.get("total_events") or 0), len(valid_raw))
+                features["total_watch_time"] = max(safe_float(features.get("total_watch_time")), total_time)
+                features["total_events"] = max(safe_int(features.get("total_events")), len(valid_raw))
                 features["avg_session_duration"] = avg_dur
 
         def parse_time_str(val):

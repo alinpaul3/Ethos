@@ -4,14 +4,10 @@ const RAW_BASE_URL = ((import.meta as unknown as { env?: Record<string, string> 
 export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
-    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0';
 
-    // On deployed production sites (e.g. ethos-analysis.onrender.com):
-    if (!isLocalhost) {
-      // If VITE_API_BASE_URL is missing or was set to localhost/127.0.0.1, force the deployed FastAPI URL
-      if (!RAW_BASE_URL || RAW_BASE_URL.includes('localhost') || RAW_BASE_URL.includes('127.0.0.1')) {
-        return 'https://ethos-i8i4.onrender.com';
-      }
+    // On deployed ethos-analysis production frontend, point to deployed ethos-i8i4 backend
+    if (hostname.includes('ethos-analysis.onrender.com')) {
+      return 'https://ethos-i8i4.onrender.com';
     }
   }
 

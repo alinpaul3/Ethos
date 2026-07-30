@@ -553,23 +553,53 @@ async function startServer() {
       // 1. Validation (Pydantic-like behavior via Zod)
       const eventData = eventSchema.parse(req.body);
       
-      // 2. Extract video ID helper
-      const extractVid = (u: string) => u?.match(/[?&]v=([^&]+)/)?.[1] || null;
-      const incomingVid = extractVid(eventData.url);
+      // 2. Extract video ID & clean title helper
+      const extractVid = (u: string) => {
+        if (!u) return null;
+        if (u.includes("v=")) return u.split("v=")[1].split("&")[0];
+        if (u.includes("youtu.be/")) return u.split("youtu.be/")[1].split("?")[0].split("&")[0];
+        if (u.includes("youtube.com/shorts/")) return u.split("youtube.com/shorts/")[1].split("?")[0].split("&")[0];
+        if (u.includes("youtube.com/embed/")) return u.split("youtube.com/embed/")[1].split("?")[0].split("&")[0];
+        return null;
+      };
 
-      // Check if a raw_event for the same user and video ID occurred recently (within last 5 minutes)
+      const incomingVid = extractVid(eventData.url);
+      const incomingTitle = cleanTitle(eventData.content_title || "");
+
+      // Check if a raw_event for the same user and video ID / URL / Title occurred recently (within 30 minutes)
+      const existingEvents = await collections.raw_events.find({ user_id: eventData.user_id }).toArray();
+
+      const getEventTime = (e: any) => {
+        const ts = e.updated_at || e.timestamp_end || e.created_at || e.timestamp_start;
+        if (!ts) return 0;
+        const t = new Date(ts).getTime();
+        return isNaN(t) ? 0 : t;
+      };
+
+      const sortedExisting = existingEvents.sort((a: any, b: any) => getEventTime(b) - getEventTime(a));
+      const nowMs = Date.now();
+
       let recentDup: any = null;
-      if (incomingVid) {
-        const existingEvents = await collections.raw_events.find({ user_id: eventData.user_id }).toArray();
-        recentDup = existingEvents.find((e: any) => {
-          const eVid = extractVid(e.url);
-          if (eVid && eVid === incomingVid) {
-            const startTime = new Date(e.created_at || e.timestamp_start).getTime();
-            const nowTime = new Date(eventData.timestamp_start).getTime();
-            return Math.abs(nowTime - startTime) < 5 * 60 * 1000;
+      for (const e of sortedExisting) {
+        const eVid = extractVid(e.url);
+        const eTitle = cleanTitle(e.content_title || "");
+
+        let isMatch = false;
+        if (incomingVid && eVid && incomingVid === eVid) {
+          isMatch = true;
+        } else if (incomingTitle && eTitle && incomingTitle === eTitle) {
+          isMatch = true;
+        } else if (eventData.url && e.url && eventData.url.split("?")[0] === e.url.split("?")[0]) {
+          isMatch = true;
+        }
+
+        if (isMatch) {
+          const lastTime = getEventTime(e);
+          if (nowMs - lastTime < 30 * 60 * 1000 || lastTime === 0) {
+            recentDup = e;
+            break;
           }
-          return false;
-        });
+        }
       }
 
       if (recentDup) {
@@ -579,16 +609,18 @@ async function startServer() {
           {
             $set: {
               duration_seconds: newDur,
-              timestamp_end: eventData.timestamp_end,
+              timestamp_end: eventData.timestamp_end || new Date().toISOString(),
+              updated_at: new Date().toISOString(),
               content_title: eventData.content_title || recentDup.content_title
             }
           }
         );
-        console.log(`Merged duplicate watch event for user ${eventData.user_id}, video ${incomingVid}. Updated duration: ${newDur}s`);
+        console.log(`Merged duplicate watch event for user ${eventData.user_id}, video/title '${incomingTitle || incomingVid}'. Updated duration: ${newDur}s`);
       } else {
         await collections.raw_events.insertOne({
           ...eventData,
           created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         });
         console.log(`Event stored for user ${eventData.user_id}. Platform: ${eventData.platform}`);
       }

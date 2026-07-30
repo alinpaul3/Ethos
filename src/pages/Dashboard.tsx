@@ -3,6 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Activity, Clock, Database, Info, RefreshCw, Compass, Shield, Award, Brain, Tag, ChevronDown, ChevronUp, Play, Sparkles, Zap, Download, Layers, ArrowUpRight, BarChart3, Radio, CheckCircle2, Cpu, FileText, ShieldCheck, Chrome, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
 import { apiFetch, API_BASE_URL } from "../lib/api";
+
 interface DashboardProps {
   user: { user_id: string; email: string };
 }
@@ -77,7 +78,6 @@ export function Dashboard({ user }: DashboardProps) {
 
       const res = await apiFetch("/events", {
         method: "POST",
-        
         body: JSON.stringify({
           user_id: user.user_id,
           platform: "youtube",
@@ -116,7 +116,7 @@ export function Dashboard({ user }: DashboardProps) {
   }
 
   const hasEvents = data && data.total_captured_events > 0;
-    
+  
   // Deduplicate and consolidate events for the same video ID for clean display
   const rawRecentEvents = data?.recent_events || [];
   const recentEvents = (() => {
@@ -144,7 +144,7 @@ export function Dashboard({ user }: DashboardProps) {
   const profile = data?.profile || {};
   const rawSignals = profile.signals || {};
 
-    // Compute robust metrics fallback from captured events if features document is pending/null
+  // Compute robust metrics fallback from captured events if features document is pending/null
   const computedTotalWatchTime = recentEvents.reduce((acc: number, e: any) => acc + (Number(e.duration_seconds) || 0), 0);
   const totalWatchTime = (features.total_watch_time && features.total_watch_time > 0)
     ? features.total_watch_time
@@ -155,14 +155,24 @@ export function Dashboard({ user }: DashboardProps) {
     ? features.avg_session_duration
     : computedAvgSession;
 
-      const uniqueTitlesCount = new Set(recentEvents.map(e => e.content_title || e.url)).size;
+  const uniqueTitlesCount = new Set(recentEvents.map(e => e.content_title || e.url)).size;
 
   // Behavioral signals fallback computation for users with events
+  const isValidSignal = (val: any) => Boolean(val) && String(val).toUpperCase() !== "CALCULATING";
+
   const signals = {
-    curiosity_signal: rawSignals.curiosity_signal || (uniqueTitlesCount > 1 ? "High" : (recentEvents.length > 0 ? "Moderate" : "CALCULATING")),
-    discipline_signal: rawSignals.discipline_signal || (recentEvents.length > 0 ? "High" : "CALCULATING"),
-    engagement_signal: rawSignals.engagement_signal || (totalWatchTime > 1800 ? "High" : (totalWatchTime > 60 ? "Moderate" : (recentEvents.length > 0 ? "Low" : "CALCULATING"))),
-    emotional_stability_signal: rawSignals.emotional_stability_signal || (recentEvents.length > 0 ? "High" : "CALCULATING")
+    curiosity_signal: isValidSignal(rawSignals.curiosity_signal)
+      ? rawSignals.curiosity_signal
+      : (uniqueTitlesCount > 1 ? "High" : (recentEvents.length > 0 ? "Moderate" : "CALCULATING")),
+    discipline_signal: isValidSignal(rawSignals.discipline_signal)
+      ? rawSignals.discipline_signal
+      : (recentEvents.length > 0 ? "High" : "CALCULATING"),
+    engagement_signal: isValidSignal(rawSignals.engagement_signal)
+      ? rawSignals.engagement_signal
+      : (totalWatchTime > 1800 ? "High" : (totalWatchTime > 60 ? "Moderate" : (recentEvents.length > 0 ? "Low" : "CALCULATING"))),
+    emotional_stability_signal: isValidSignal(rawSignals.emotional_stability_signal)
+      ? rawSignals.emotional_stability_signal
+      : (recentEvents.length > 0 ? "High" : "CALCULATING")
   };
 
   const avgSentiment = (features.avg_sentiment !== undefined && features.avg_sentiment !== null)
@@ -635,19 +645,19 @@ export function Dashboard({ user }: DashboardProps) {
                       const displayTitle = matchingEnriched?.youtube_metadata?.official_title || e.content_title || "YouTube Event";
 
                       return (
-                      <div key={i} className="p-4 flex items-center justify-between text-xs hover:bg-slate-50 transition-colors">
-                        <div className="space-y-0.5 min-w-0 pr-4">
-                          <p className="font-semibold text-slate-900 truncate">{e.content_title}</p>
-                          <p className="text-[10px] font-mono text-slate-400 truncate">
-                            {e.platform} • <a href={e.url} target="_blank" rel="noreferrer" className="text-amber-600 underline hover:text-amber-700">{e.url}</a>
-                          </p>
+                        <div key={i} className="p-4 flex items-center justify-between text-xs hover:bg-slate-50 transition-colors">
+                          <div className="space-y-0.5 min-w-0 pr-4">
+                            <p className="font-semibold text-slate-900 truncate">{displayTitle}</p>
+                            <p className="text-[10px] font-mono text-slate-400 truncate">
+                              {e.platform} • <a href={e.url} target="_blank" rel="noreferrer" className="text-amber-600 underline hover:text-amber-700">{e.url}</a>
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="font-mono text-xs font-bold text-slate-800 block">{formatDuration(e.duration_seconds)}</span>
+                            <span className="text-[9px] font-mono text-slate-400 block">{new Date(e.created_at || e.timestamp_start).toLocaleTimeString()}</span>
+                          </div>
                         </div>
-                        <div className="text-right shrink-0">
-                          <span className="font-mono text-xs font-bold text-slate-800 block">{formatDuration(e.duration_seconds)}</span>
-                          <span className="text-[9px] font-mono text-slate-400 block">{new Date(e.created_at || e.timestamp_start).toLocaleTimeString()}</span>
-                        </div>
-                      </div>
-                    );
+                      );
                     })}
                   </div>
                 </div>
