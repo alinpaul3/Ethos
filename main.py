@@ -1,8 +1,8 @@
-from fastapi import FastAPI, HTTPException, Body, Request, Response, Depends, Cookie, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Body, Request, Response, Depends, Cookie, BackgroundTasks, Query
 from pydantic import BaseModel, HttpUrl, EmailStr
 from enrichment_service import enrich_event_pipeline
 from motor.motor_asyncio import AsyncIOMotorClient
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 from fastapi.responses import JSONResponse, FileResponse, Response
 import httpx
@@ -10,6 +10,7 @@ import logging
 import statistics
 import re
 import jwt
+import math
 import bcrypt
 from uuid import uuid4
 from typing import List, Optional
@@ -110,6 +111,10 @@ def sanitize_doc(doc):
         for k, v in doc.items():
             if k == "_id":
                 new_doc[k] = str(v)
+            elif isinstance(v, (datetime, date)):
+                new_doc[k] = v.isoformat()
+            elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                new_doc[k] = 0.0
             elif isinstance(v, (dict, list)):
                 new_doc[k] = sanitize_doc(v)
             else:
@@ -594,12 +599,16 @@ async def store_event(event: EventPayload, background_tasks: BackgroundTasks):
     return {"message": "Event stored"}
 
 # --- PHASE 4: PROCESSING PIPELINE ---
-def clean_title(title: str) -> str:
+def clean_title(title: Any) -> str:
+    if not title or not isinstance(title, str):
+        return ""
     title = title.lower().replace(" - youtube", "")
     title = re.sub(r'[^\w\s]', '', title)
     return re.sub(r'\s+', ' ', title).strip()
 
-def get_sentiment_score(title: str) -> float:
+def get_sentiment_score(title: Any) -> float:
+    if not title or not isinstance(title, str):
+        return 0.0
     pos = {"happy", "good", "great", "awesome", "amazing", "love", "best", "funny", "laugh", "joy"}
     neg = {"sad", "bad", "worst", "hate", "terrible", "awful", "scary", "death", "angry", "pain"}
     words = title.lower().split()
@@ -612,75 +621,89 @@ def get_sentiment_score(title: str) -> float:
 async def process_data_for_user(user_id: str) -> Optional[dict]:
     if not db:
         return None
-    
-    cursor = db.raw_events.find({"user_id": user_id})
-    events = await cursor.to_list(length=1000)
-    
-    if not events:
+    try:
+        cursor = db.raw_events.find({"user_id": user_id})
+        events = await cursor.to_list(length=1000)
+        
+        if not events:
+            return None
+
+        valid_events = [e for e in events if isinstance(e, dict) and (e.get("content_title") or e.get("url"))]
+        if not valid_events:
+            valid_events = [e for e in events if isinstance(e, dict)]
+
+        if not valid_events:
+            return None
+
+        total_events = len(valid_events)
+        total_time = sum(float(e.get("duration_seconds", 0) or 0) for e in valid_events)
+        
+        late_night = 0
+        hours = []
+        for e in valid_events:
+            try:
+                time_str = e.get("timestamp_start") or e.get("created_at") or ""
+                if isinstance(time_str, (datetime, date)):
+                    dt = time_str
+                elif isinstance(time_str, str) and time_str.strip():
+                    dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                else:
+                    dt = None
+                if dt:
+                    hours.append(dt.hour)
+                    if dt.hour >= 22 or dt.hour < 4:
+                        late_night += 1
+            except Exception:
+                pass
+        
+        ln_ratio = late_night / total_events if total_events else 0.0
+        consistency = 1.0 - (statistics.stdev(hours) / 12.0) if len(hours) > 1 else 1.0
+        consistency = max(0.0, min(1.0, consistency))
+
+        all_titles = [clean_title(e.get("content_title") or e.get("url") or "") for e in valid_events]
+        all_titles = [t for t in all_titles if t]
+
+        meaningful_words = {w for t in all_titles for w in t.split() if len(w) > 3}
+        topic_div = len(meaningful_words) / (total_events + 1)
+
+        unique_titles = set(all_titles)
+        repetitive = (sum(1 for t, c in {t: all_titles.count(t) for t in unique_titles}.items() if c > 1) / len(unique_titles)) if unique_titles else 0.0
+
+        sent_scores = [get_sentiment_score(t) for t in all_titles] if all_titles else [0.0]
+        avg_sent = sum(sent_scores) / len(sent_scores) if sent_scores else 0.0
+        sent_var = statistics.variance(sent_scores) if len(sent_scores) > 1 else 0.0
+
+        features = {
+            "user_id": user_id,
+            "total_events": total_events,
+            "avg_session_duration": total_time / total_events if total_events else 0.0,
+            "total_watch_time": total_time,
+            "late_night_ratio": ln_ratio,
+            "topic_diversity": topic_div,
+            "repetition_score": repetitive,
+            "activity_consistency": consistency,
+            "avg_sentiment": avg_sent,
+            "processed_at": datetime.utcnow().isoformat()
+        }
+
+        await db.user_features.update_one({"user_id": user_id}, {"$set": features}, upsert=True)
+
+        profile = {
+            "user_id": user_id,
+            "signals": {
+                "curiosity_signal": "High" if topic_div > 0.5 else ("Moderate" if topic_div > 0.2 else "Low"),
+                "discipline_signal": "High" if (consistency > 0.7 and ln_ratio < 0.2) else ("Low" if ln_ratio > 0.5 else "Moderate"),
+                "engagement_signal": "High" if total_time > 3600 else ("Moderate" if total_time > 60 else "Low"),
+                "emotional_stability_signal": "High" if sent_var < 1.0 else "Variable"
+            },
+            "derived_at": datetime.utcnow().isoformat()
+        }
+
+        await db.behavior_profiles.update_one({"user_id": user_id}, {"$set": profile}, upsert=True)
+        return profile
+    except Exception as err:
+        logger.error(f"[process_data_for_user] Exception for user {user_id}: {err}")
         return None
-
-    valid_events = [e for e in events if e.get("content_title")]
-    if not valid_events:
-        valid_events = events
-
-    total_events = len(valid_events)
-    total_time = sum(float(e.get("duration_seconds", 0) or 0) for e in valid_events)
-    
-    late_night = 0
-    hours = []
-    for e in valid_events:
-        try:
-            time_str = e.get("timestamp_start") or e.get("created_at") or ""
-            dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-            hours.append(dt.hour)
-            if dt.hour >= 22 or dt.hour < 4:
-                late_night += 1
-        except Exception:
-            pass
-    
-    ln_ratio = late_night / total_events if total_events else 0.0
-    consistency = 1.0 - (statistics.stdev(hours) / 12.0) if len(hours) > 1 else 1.0
-    consistency = max(0.0, min(1.0, consistency))
-
-    meaningful_words = {w for t in [clean_title(e.get("content_title", "")) for e in valid_events] for w in t.split() if len(w) > 3}
-    topic_div = len(meaningful_words) / (total_events + 1)
-
-    all_titles = [clean_title(e.get("content_title", "")) for e in valid_events]
-    unique_titles = set(all_titles)
-    repetitive = (sum(1 for t, c in {t: all_titles.count(t) for t in unique_titles}.items() if c > 1) / len(unique_titles)) if unique_titles else 0.0
-
-    sent_scores = [get_sentiment_score(e.get("content_title", "")) for e in valid_events]
-    avg_sent = sum(sent_scores) / total_events if total_events else 0.0
-    sent_var = statistics.variance(sent_scores) if len(sent_scores) > 1 else 0.0
-
-    features = {
-        "user_id": user_id,
-        "total_events": total_events,
-        "avg_session_duration": total_time / total_events if total_events else 0.0,
-        "total_watch_time": total_time,
-        "late_night_ratio": ln_ratio,
-        "topic_diversity": topic_div,
-        "repetition_score": repetitive,
-        "activity_consistency": consistency,
-        "avg_sentiment": avg_sent,
-        "processed_at": datetime.utcnow().isoformat()
-    }
-
-    await db.user_features.update_one({"user_id": user_id}, {"$set": features}, upsert=True)
-
-    profile = {
-        "user_id": user_id,
-        "signals": {
-            "curiosity_signal": "High" if topic_div > 0.5 else ("Moderate" if topic_div > 0.2 else "Low"),
-            "discipline_signal": "High" if (consistency > 0.7 and ln_ratio < 0.2) else ("Low" if ln_ratio > 0.5 else "Moderate"),
-            "engagement_signal": "High" if total_time > 3600 else ("Moderate" if total_time > 60 else "Low"),
-            "emotional_stability_signal": "High" if sent_var < 1.0 else "Variable"
-        },
-        "derived_at": datetime.utcnow().isoformat()
-    }
-
-    await db.behavior_profiles.update_one({"user_id": user_id}, {"$set": profile}, upsert=True)
-    return profile
 
 @app.post("/process-data")
 async def process_data(req: ProcessRequest):
@@ -690,6 +713,7 @@ async def process_data(req: ProcessRequest):
     if not profile:
         raise HTTPException(status_code=404, detail="No events found or failed to process")
     return {"message": "Processing completed", "user_id": req.user_id, "summary": profile["signals"]}
+
 @app.post("/preprocess")
 @app.post("/api/preprocess")
 async def preprocess(payload: Optional[PreprocessRequest] = Body(None)):
@@ -766,7 +790,7 @@ async def feature_engineering(payload: Optional[PipelineStageRequest] = Body(Non
         events = events or []
         valid_events = [
             e for e in events 
-            if (isinstance(e, dict) and (e.get("duration_seconds", 0) >= 5 or "content_title" in e or (e.get("browser_event") and e["browser_event"].get("content_title"))))
+            if (isinstance(e, dict) and (e.get("duration_seconds", 0) >= 5 or "content_title" in e or (isinstance(e.get("browser_event"), dict) and e["browser_event"].get("content_title"))))
         ]
         total_events = len(valid_events)
 
@@ -784,24 +808,35 @@ async def feature_engineering(payload: Optional[PipelineStageRequest] = Body(Non
                 "processed_at": datetime.utcnow().isoformat()
             }
         else:
+            def get_be(e_dict):
+                be_val = e_dict.get("browser_event")
+                return be_val if isinstance(be_val, dict) else {}
+
             total_time = sum(
-                (e.get("duration_seconds") or e.get("browser_event", {}).get("duration_seconds", 0) or 0)
+                float(e.get("duration_seconds") or get_be(e).get("duration_seconds", 0) or 0)
                 for e in valid_events
             )
             late_night = 0
             hours = []
             titles = []
             for e in valid_events:
-                title = e.get("content_title") or e.get("browser_event", {}).get("content_title") or ""
+                be = get_be(e)
+                title = e.get("content_title") or be.get("content_title") or ""
                 if title:
                     titles.append(clean_title(title))
-                ts = e.get("timestamp_start") or e.get("browser_event", {}).get("timestamp_start")
+                ts = e.get("timestamp_start") or be.get("timestamp_start")
                 if ts:
                     try:
-                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        hours.append(dt.hour)
-                        if dt.hour >= 22 or dt.hour < 4:
-                            late_night += 1
+                        if isinstance(ts, (datetime, date)):
+                            dt = ts
+                        elif isinstance(ts, str) and ts.strip():
+                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        else:
+                            dt = None
+                        if dt:
+                            hours.append(dt.hour)
+                            if dt.hour >= 22 or dt.hour < 4:
+                                late_night += 1
                     except Exception:
                         pass
 
@@ -994,6 +1029,7 @@ async def generate_explanation(payload: Optional[PipelineStageRequest] = Body(No
             "message": "Explanation generation error",
             "error": str(error)
         })
+
 @app.get("/api/dashboard-data")
 @app.get("/api/dashboard")
 async def get_dashboard(request: Request, user_id: Optional[str] = None):
@@ -1037,13 +1073,17 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
         if not questionnaire:
             questionnaire = await db.questionnaire_responses.find_one({"user_id": target_user_id})
 
-        
-
-# Build map of url / video_id -> official_title from enriched_events
+        # Build map of url / video_id -> official_title from enriched_events
         official_title_map = {}
         for ee in enriched_events:
-            e_url = (ee.get("browser_event") or {}).get("url") or ""
-            e_title = (ee.get("youtube_metadata") or {}).get("official_title")
+            if not isinstance(ee, dict):
+                continue
+            be = ee.get("browser_event")
+            be_dict = be if isinstance(be, dict) else {}
+            ym = ee.get("youtube_metadata")
+            ym_dict = ym if isinstance(ym, dict) else {}
+            e_url = be_dict.get("url") or ""
+            e_title = ym_dict.get("official_title")
             if e_url and e_title and e_title not in ["Unknown YouTube Video", "YouTube Video"]:
                 official_title_map[e_url] = e_title
                 if "v=" in e_url:
@@ -1052,6 +1092,8 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
                         official_title_map[vid] = e_title
 
         for re in raw_events:
+            if not isinstance(re, dict):
+                continue
             r_url = re.get("url") or ""
             if r_url in official_title_map:
                 re["content_title"] = official_title_map[r_url]
@@ -1061,35 +1103,48 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
                     re["content_title"] = official_title_map[vid]
 
         if raw_events:
-            total_time = sum(float(e.get("duration_seconds") or 0) for e in raw_events)
-            avg_dur = total_time / len(raw_events) if raw_events else 0.0
-            sent_scores = [get_sentiment_score(e.get("content_title") or "") for e in raw_events]
-            avg_sent = (sum(sent_scores) / len(raw_events)) if raw_events else 0.0
+            valid_raw = [e for e in raw_events if isinstance(e, dict)]
+            total_time = sum(float(e.get("duration_seconds") or 0) for e in valid_raw)
+            avg_dur = total_time / len(valid_raw) if valid_raw else 0.0
+            sent_scores = [get_sentiment_score(e.get("content_title") or "") for e in valid_raw]
+            avg_sent = (sum(sent_scores) / len(valid_raw)) if valid_raw else 0.0
             if not features:
                 features = {
-                "user_id": target_user_id,
-                "total_events": len(raw_events),
-                "avg_session_duration": avg_dur,
-                "total_watch_time": total_time,
-                "late_night_ratio": 0.0,
-                "topic_diversity": 0.5,
-                "learning_ratio": 0.5,
-                "repetition_score": 0.0,
-                "activity_consistency": 1.0,
-                "avg_sentiment": avg_sent,
-                "processed_at": datetime.utcnow().isoformat()
+                    "user_id": target_user_id,
+                    "total_events": len(valid_raw),
+                    "avg_session_duration": avg_dur,
+                    "total_watch_time": total_time,
+                    "late_night_ratio": 0.0,
+                    "topic_diversity": 0.5,
+                    "learning_ratio": 0.5,
+                    "repetition_score": 0.0,
+                    "activity_consistency": 1.0,
+                    "avg_sentiment": avg_sent,
+                    "processed_at": datetime.utcnow().isoformat()
                 }
             else:
                 features["total_watch_time"] = max(float(features.get("total_watch_time") or 0), total_time)
-                features["total_events"] = max(int(features.get("total_events") or 0), len(raw_events))
+                features["total_events"] = max(int(features.get("total_events") or 0), len(valid_raw))
                 features["avg_session_duration"] = avg_dur
- 
+
+        def parse_time_str(val):
+            if not val:
+                return ""
+            if isinstance(val, (datetime, date)):
+                return val.isoformat()
+            return str(val)
+
         def event_time(e):
-            return e.get("created_at") or e.get("timestamp_start") or ""
+            if not isinstance(e, dict):
+                return ""
+            return parse_time_str(e.get("created_at") or e.get("timestamp_start"))
 
         def enriched_time(e):
-            be = e.get("browser_event") or {}
-            return be.get("created_at") or be.get("timestamp_start") or ""
+            if not isinstance(e, dict):
+                return ""
+            be = e.get("browser_event")
+            be_dict = be if isinstance(be, dict) else {}
+            return parse_time_str(be_dict.get("created_at") or be_dict.get("timestamp_start"))
 
         sorted_events = sorted(raw_events, key=event_time, reverse=True)
         sorted_enriched = sorted(enriched_events, key=enriched_time, reverse=True)
@@ -1186,7 +1241,7 @@ async def questionnaire_submit(payload: BfiSubmissionRequest, request: Request):
 
 @app.get("/questionnaire/response")
 @app.get("/api/questionnaire/response")
-async def get_dashboard(request: Request, user_id: Optional[str] = None):
+async def questionnaire_get(request: Request, user_id: Optional[str] = Query(None)):
     target_user_id = user_id
     if not target_user_id:
         token = request.cookies.get("auth_token")
@@ -1222,7 +1277,7 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
 # --- EXPORT TRAINING DATASET ---
 @app.get("/export-training-dataset")
 @app.get("/api/export-training-dataset")
-async def get_dashboard(request: Request, user_id: Optional[str] = None):
+async def export_training_dataset(format: Optional[str] = Query(None)):
     if db is None:
         return JSONResponse(status_code=500, content={"status": "failed", "error": "Database unavailable"})
 
@@ -1333,7 +1388,7 @@ async def download_extension():
     )
 
 @app.get("/api/auth/extension-token")
-async def get_dashboard(request: Request, user_id: Optional[str] = None):
+async def get_extension_token(request: Request, user_id: Optional[str] = Query(None)):
     target_user_id = user_id
     auth_header = request.headers.get("authorization")
     if auth_header and auth_header.startswith("Bearer "):
@@ -1492,3 +1547,6 @@ async def plot_mae():
     if os.path.exists(plot_path):
         return FileResponse(plot_path, media_type="image/png")
     return Response(content="MAE plot not found", status_code=404)
+
+
+

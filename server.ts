@@ -438,7 +438,8 @@ async function startServer() {
   const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 
   // Processing Helpers
-  const cleanTitle = (title: string) => {
+  const cleanTitle = (title: any): string => {
+    if (!title || typeof title !== "string") return "";
     return title
       .toLowerCase()
       .replace(" - youtube", "")
@@ -447,7 +448,8 @@ async function startServer() {
       .trim();
   };
 
-  const getSentimentScore = (title: string) => {
+  const getSentimentScore = (title: any): number => {
+    if (!title || typeof title !== "string") return 0;
     const positiveWords = ["happy", "good", "great", "awesome", "amazing", "love", "best", "funny", "laugh", "joy"];
     const negativeWords = ["sad", "bad", "worst", "hate", "terrible", "awful", "scary", "death", "angry", "pain"];
     
@@ -461,52 +463,66 @@ async function startServer() {
   };
 
   const calculateLateNightRatio = (events: any[]) => {
-    if (events.length === 0) return 0;
+    if (!Array.isArray(events) || events.length === 0) return 0;
     const lateNightEvents = events.filter(e => {
-      const date = new Date(e.timestamp_start);
+      if (!e) return false;
+      const ts = e.timestamp_start || e.created_at;
+      if (!ts) return false;
+      const date = new Date(ts);
       const hour = date.getHours();
-      return hour >= 22 || hour < 4; // 10 PM to 4 AM
+      return !isNaN(hour) && (hour >= 22 || hour < 4);
     });
     return lateNightEvents.length / events.length;
   };
 
   const calculateActivityConsistency = (events: any[]) => {
-    if (events.length < 2) return 1;
-    const hours = events.map(e => new Date(e.timestamp_start).getHours());
+    if (!Array.isArray(events) || events.length < 2) return 1;
+    const hours = events.map(e => {
+      if (!e) return NaN;
+      const ts = e.timestamp_start || e.created_at;
+      return ts ? new Date(ts).getHours() : NaN;
+    }).filter(h => !isNaN(h));
+    if (hours.length < 2) return 1;
     const mean = hours.reduce((a, b) => a + b, 0) / hours.length;
     const variance = hours.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / hours.length;
-    return 1 - (Math.sqrt(variance) / 12); // Normalized 0-1, where 1 is highly consistent (low variance)
+    const consistency = 1 - (Math.sqrt(variance) / 12);
+    return isNaN(consistency) ? 1 : Math.max(0, Math.min(1, consistency));
   };
 
   const calculateTopicDiversity = (events: any[]) => {
-    if (events.length === 0) return 0;
-    const titles = events.map(e => cleanTitle(e.content_title));
+    if (!Array.isArray(events) || events.length === 0) return 0;
+    const titles = events.map(e => e ? cleanTitle(e.content_title || e.url || "") : "").filter(Boolean);
+    if (titles.length === 0) return 0;
     const uniqueWords = new Set(titles.join(" ").split(" ").filter(w => w.length > 3));
-    return uniqueWords.size / (events.length + 1); // Rough proxy for diversity
+    return uniqueWords.size / (events.length + 1);
   };
 
   const calculateLearningRatio = (events: any[]) => {
-    if (events.length === 0) return 0;
+    if (!Array.isArray(events) || events.length === 0) return 0;
     const learningKeywords = [
       "tutorial", "learn", "course", "lecture", "code", "guide", "how", "math",
       "science", "python", "javascript", "react", "doc", "study", "history", "tech",
       "explained", "education", "mit", "stanford", "ai", "ml", "programming"
     ];
     const learningEvents = events.filter(e => {
-      const title = (e.content_title || "").toLowerCase();
-      const cat = (e.category || "").toLowerCase();
+      if (!e) return false;
+      const title = typeof e.content_title === "string" ? e.content_title.toLowerCase() : "";
+      const cat = typeof e.category === "string" ? e.category.toLowerCase() : "";
       return learningKeywords.some(kw => title.includes(kw) || cat.includes(kw));
     });
     return learningEvents.length / events.length;
   };
 
   const calculateRepetitionScore = (events: any[]) => {
-    if (events.length === 0) return 0;
-    const titles = events.map(e => cleanTitle(e.content_title));
+    if (!Array.isArray(events) || events.length === 0) return 0;
+    const titles = events.map(e => e ? cleanTitle(e.content_title || "") : "").filter(Boolean);
+    if (titles.length === 0) return 0;
     const counts: { [key: string]: number } = {};
     titles.forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+    const keys = Object.keys(counts);
+    if (keys.length === 0) return 0;
     const repetitiveCount = Object.values(counts).filter(c => c > 1).length;
-    return repetitiveCount / Object.keys(counts).length;
+    return repetitiveCount / keys.length;
   };
 
   // Event validation schema
@@ -1066,7 +1082,7 @@ async function startServer() {
         return res.status(404).json({ status: "failed", error: "Extension package directory not found" });
       }
 
-            // @ts-ignore
+      // @ts-ignore
       const AdmZipModule: any = await import("adm-zip");
       const AdmZipClass: any = AdmZipModule.default || AdmZipModule;
       const zip = new AdmZipClass();
