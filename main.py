@@ -49,7 +49,7 @@ if not MONGODB_URI:
     logger.warning("MONGODB_URI not set")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "default_secret_for_dev_only")
-PROCESSING_THRESHOLD = 100
+PROCESSING_THRESHOLD = 1
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 
 # MongoDB Client
@@ -517,11 +517,48 @@ async def store_event(event: EventPayload, background_tasks: BackgroundTasks):
     event_dict["url"] = str(event_dict["url"])
     event_dict["created_at"] = datetime.utcnow().isoformat()
     
-    await db.raw_events.insert_one(event_dict)
-    logger.info(f"Event stored for user {event.user_id}")
+        # Deduplicate recent events for same video ID within 5 mins
+    def extract_vid(u):
+        if "v=" in u:
+            return u.split("v=")[1].split("&")[0]
+        return None
+
+    incoming_vid = extract_vid(event_dict["url"])
+    recent_dup = None
+    if incoming_vid:
+        existing_user_events = await db.raw_events.find({"user_id": event.user_id}).to_list(100)
+        for e in existing_user_events:
+            e_vid = extract_vid(e.get("url", ""))
+            if e_vid and e_vid == incoming_vid:
+                e_time_str = e.get("created_at") or e.get("timestamp_start")
+                if e_time_str:
+                    try:
+                        e_time = datetime.fromisoformat(e_time_str.replace("Z", "+00:00"))
+                        now_time = datetime.utcnow()
+                        if abs((now_time - e_time.replace(tzinfo=None)).total_seconds()) < 300:
+                            recent_dup = e
+                            break
+                    except Exception:
+                        pass
+
+    if recent_dup:
+        new_dur = max(float(recent_dup.get("duration_seconds") or 0), float(event_dict.get("duration_seconds") or 0))
+        await db.raw_events.update_one(
+            {"_id": recent_dup["_id"]},
+            {"$set": {
+                "duration_seconds": new_dur,
+                "timestamp_end": event_dict["timestamp_end"],
+                "content_title": event_dict.get("content_title") or recent_dup.get("content_title")
+            }}
+        )
+        logger.info(f"Merged duplicate event for user {event.user_id}, video {incoming_vid}. New duration: {new_dur}s")
+    else:
+       await db.raw_events.insert_one(event_dict)
+       logger.info(f"Event stored for user {event.user_id}")
 
     # Enqueue enrichment pipeline to collect, enrich, and store in background
     background_tasks.add_task(enrich_event_pipeline, event_dict, db)
+    background_tasks.add_task(process_data_for_user, event.user_id)
 
     count = await db.raw_events.count_documents({"user_id": event.user_id})
 
@@ -572,50 +609,54 @@ def get_sentiment_score(title: str) -> float:
         if w in neg: score -= 1.0
     return score
 
-@app.post("/process-data")
-async def process_data(req: ProcessRequest):
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+async def process_data_for_user(user_id: str) -> Optional[dict]:
+    if not db:
+        return None
     
-    cursor = db.raw_events.find({"user_id": req.user_id})
+    cursor = db.raw_events.find({"user_id": user_id})
     events = await cursor.to_list(length=1000)
     
-    if events is None:
-        raise HTTPException(status_code=404, detail="No events found")
+    if not events:
+        return None
 
-    valid_events = [e for e in events if e.get("duration_seconds", 0) >= 5 and e.get("content_title")]
+    valid_events = [e for e in events if e.get("content_title")]
     if not valid_events:
-        raise HTTPException(status_code=400, detail="No valid events")
+        valid_events = events
 
     total_events = len(valid_events)
-    total_time = sum(e["duration_seconds"] for e in valid_events)
+    total_time = sum(float(e.get("duration_seconds", 0) or 0) for e in valid_events)
     
     late_night = 0
     hours = []
     for e in valid_events:
-        dt = datetime.fromisoformat(e["timestamp_start"].replace("Z", "+00:00"))
-        hours.append(dt.hour)
-        if dt.hour >= 22 or dt.hour < 4:
-            late_night += 1
+        try:
+            time_str = e.get("timestamp_start") or e.get("created_at") or ""
+            dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+            hours.append(dt.hour)
+            if dt.hour >= 22 or dt.hour < 4:
+                late_night += 1
+        except Exception:
+            pass
     
-    ln_ratio = late_night / total_events
+    ln_ratio = late_night / total_events if total_events else 0.0
     consistency = 1.0 - (statistics.stdev(hours) / 12.0) if len(hours) > 1 else 1.0
     consistency = max(0.0, min(1.0, consistency))
 
-    meaningful_words = {w for t in [clean_title(e["content_title"]) for e in valid_events] for w in t.split() if len(w) > 3}
+    meaningful_words = {w for t in [clean_title(e.get("content_title", "")) for e in valid_events] for w in t.split() if len(w) > 3}
     topic_div = len(meaningful_words) / (total_events + 1)
 
-    all_titles = [clean_title(e["content_title"]) for e in valid_events]
-    repetitive = sum(1 for t, c in {t: all_titles.count(t) for t in set(all_titles)}.items() if c > 1) / len(set(all_titles))
+    all_titles = [clean_title(e.get("content_title", "")) for e in valid_events]
+    unique_titles = set(all_titles)
+    repetitive = (sum(1 for t, c in {t: all_titles.count(t) for t in unique_titles}.items() if c > 1) / len(unique_titles)) if unique_titles else 0.0
 
-    sent_scores = [get_sentiment_score(e["content_title"]) for e in valid_events]
-    avg_sent = sum(sent_scores) / total_events
+    sent_scores = [get_sentiment_score(e.get("content_title", "")) for e in valid_events]
+    avg_sent = sum(sent_scores) / total_events if total_events else 0.0
     sent_var = statistics.variance(sent_scores) if len(sent_scores) > 1 else 0.0
 
     features = {
-        "user_id": req.user_id,
+        "user_id": user_id,
         "total_events": total_events,
-        "avg_session_duration": total_time / total_events,
+        "avg_session_duration": total_time / total_events if total_events else 0.0,
         "total_watch_time": total_time,
         "late_night_ratio": ln_ratio,
         "topic_diversity": topic_div,
@@ -625,21 +666,29 @@ async def process_data(req: ProcessRequest):
         "processed_at": datetime.utcnow().isoformat()
     }
 
-    await db.user_features.update_one({"user_id": req.user_id}, {"$set": features}, upsert=True)
+    await db.user_features.update_one({"user_id": user_id}, {"$set": features}, upsert=True)
 
     profile = {
-        "user_id": req.user_id,
+        "user_id": user_id,
         "signals": {
             "curiosity_signal": "High" if topic_div > 0.5 else ("Moderate" if topic_div > 0.2 else "Low"),
             "discipline_signal": "High" if (consistency > 0.7 and ln_ratio < 0.2) else ("Low" if ln_ratio > 0.5 else "Moderate"),
-            "engagement_signal": "High" if total_time > 3600 else ("Moderate" if total_time > 1800 else "Low"),
+            "engagement_signal": "High" if total_time > 3600 else ("Moderate" if total_time > 60 else "Low"),
             "emotional_stability_signal": "High" if sent_var < 1.0 else "Variable"
         },
         "derived_at": datetime.utcnow().isoformat()
     }
 
-    await db.behavior_profiles.update_one({"user_id": req.user_id}, {"$set": profile}, upsert=True)
+    await db.behavior_profiles.update_one({"user_id": user_id}, {"$set": profile}, upsert=True)
+    return profile
 
+@app.post("/process-data")
+async def process_data(req: ProcessRequest):
+    if not db:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    profile = await process_data_for_user(req.user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="No events found or failed to process")
     return {"message": "Processing completed", "user_id": req.user_id, "summary": profile["signals"]}
 @app.post("/preprocess")
 @app.post("/api/preprocess")
@@ -972,8 +1021,15 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
         }
 
     try:
-        features = await db.user_features.find_one({"user_id": target_user_id})
+        raw_events = await db.raw_events.find({"user_id": target_user_id}).to_list(1000)
+        enriched_events = await db.enriched_events.find({"user_id": target_user_id}).to_list(1000)
+
+        # Auto-compute profile if missing but raw_events exist
         profile = await db.behavior_profiles.find_one({"user_id": target_user_id})
+        if not profile and raw_events:
+            profile = await process_data_for_user(target_user_id)
+
+        features = await db.user_features.find_one({"user_id": target_user_id})
         questionnaire = await db.questionnaire_responses.find_one({
             "user_id": target_user_id,
             "questionnaire_type": "BFI-44"
@@ -981,8 +1037,7 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
         if not questionnaire:
             questionnaire = await db.questionnaire_responses.find_one({"user_id": target_user_id})
 
-        raw_events = await db.raw_events.find({"user_id": target_user_id}).to_list(1000)
-        enriched_events = await db.enriched_events.find({"user_id": target_user_id}).to_list(1000)
+        
 
 # Build map of url / video_id -> official_title from enriched_events
         official_title_map = {}
@@ -1005,12 +1060,13 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
                 if vid in official_title_map:
                     re["content_title"] = official_title_map[vid]
 
-        if (not features or not features.get("total_watch_time")) and raw_events:
+        if raw_events:
             total_time = sum(float(e.get("duration_seconds") or 0) for e in raw_events)
             avg_dur = total_time / len(raw_events) if raw_events else 0.0
             sent_scores = [get_sentiment_score(e.get("content_title") or "") for e in raw_events]
             avg_sent = (sum(sent_scores) / len(raw_events)) if raw_events else 0.0
-            features = {
+            if not features:
+                features = {
                 "user_id": target_user_id,
                 "total_events": len(raw_events),
                 "avg_session_duration": avg_dur,
@@ -1022,7 +1078,11 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
                 "activity_consistency": 1.0,
                 "avg_sentiment": avg_sent,
                 "processed_at": datetime.utcnow().isoformat()
-            }
+                }
+            else:
+                features["total_watch_time"] = max(float(features.get("total_watch_time") or 0), total_time)
+                features["total_events"] = max(int(features.get("total_events") or 0), len(raw_events))
+                features["avg_session_duration"] = avg_dur
  
         def event_time(e):
             return e.get("created_at") or e.get("timestamp_start") or ""

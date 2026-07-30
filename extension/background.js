@@ -114,6 +114,18 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
+let finalizeTimer = null;
+
+function getVideoId(urlStr) {
+  if (!urlStr) return null;
+  try {
+    const match = urlStr.match(/[?&]v=([^&]+)/);
+    return match ? match[1] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SET_CONNECTION") {
     activeUserId = message.user_id;
@@ -126,7 +138,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     sendResponse({ success: true });
   } else if (message.type === "WATCH_START") {
-    console.log("Tracking started for:", message.url);
+    console.log("Tracking start request for:", message.url);
+    const newVid = getVideoId(message.url);
+    const currVid = currentSession ? getVideoId(currentSession.url) : null;
+
+    // If already tracking the exact same video ID, cancel any pending pause timer and preserve session
+    if (currentSession && currVid && newVid && currVid === newVid) {
+      console.log("Same video already being tracked. Preserving current session for video ID:", currVid);
+      currentSession.content_title = message.title || currentSession.content_title;
+      currentSession.url = message.url || currentSession.url;
+      if (finalizeTimer) {
+        clearTimeout(finalizeTimer);
+        finalizeTimer = null;
+      }
+      sendResponse({ success: true, resumed: true });
+      return true;
+    }
+
+    if (finalizeTimer) {
+      clearTimeout(finalizeTimer);
+      finalizeTimer = null;
+    }
+
     if (currentSession) {
       finalizeSession();
     }
@@ -137,11 +170,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       content_title: message.title,
       url: message.url,
       timestamp_start: new Date().toISOString(),
-      tabId: sender.tab.id
+      ttabId: sender.tab ? sender.tab.id : null
     };
     console.log("Session initialized for user:", activeUserId, "title:", message.title);
+    } else if (message.type === "WATCH_PAUSE") {
+    console.log("Tracking pause requested.");
+    if (currentSession && !finalizeTimer) {
+      // 30 second grace period: if user unpauses or resumes within 30s, session is kept continuous
+      finalizeTimer = setTimeout(() => {
+        finalizeSession();
+        finalizeTimer = null;
+      }, 30000);
+    }
   } else if (message.type === "WATCH_STOP") {
-    console.log("Tracking stopped.");
+       console.log("Tracking stop requested.");
+    if (finalizeTimer) {
+      clearTimeout(finalizeTimer);
+      finalizeTimer = null;
+    }
     finalizeSession();
   }
   return true;
@@ -149,6 +195,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (currentSession && currentSession.tabId === tabId) {
+    if (finalizeTimer) {
+      clearTimeout(finalizeTimer);
+      finalizeTimer = null;
+    }
     finalizeSession();
   }
 });
@@ -156,6 +206,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (currentSession && currentSession.tabId === tabId && changeInfo.url) {
     if (!changeInfo.url.includes("youtube.com/watch")) {
+      if (finalizeTimer) {
+        clearTimeout(finalizeTimer);
+        finalizeTimer = null;
+      }
       finalizeSession();
     }
   }

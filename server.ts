@@ -434,7 +434,7 @@ async function startServer() {
     };
   };
 
-  const PROCESSING_THRESHOLD = 100;
+  const PROCESSING_THRESHOLD = 1;
   const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 
   // Processing Helpers
@@ -537,17 +537,54 @@ async function startServer() {
       // 1. Validation (Pydantic-like behavior via Zod)
       const eventData = eventSchema.parse(req.body);
       
-      // 2. Store in raw_events
-      await collections.raw_events.insertOne({
-        ...eventData,
-        created_at: new Date().toISOString(),
-      });
+      // 2. Extract video ID helper
+      const extractVid = (u: string) => u?.match(/[?&]v=([^&]+)/)?.[1] || null;
+      const incomingVid = extractVid(eventData.url);
 
-      console.log(`Event stored for user ${eventData.user_id}. Platform: ${eventData.platform}`);
+      // Check if a raw_event for the same user and video ID occurred recently (within last 5 minutes)
+      let recentDup: any = null;
+      if (incomingVid) {
+        const existingEvents = await collections.raw_events.find({ user_id: eventData.user_id }).toArray();
+        recentDup = existingEvents.find((e: any) => {
+          const eVid = extractVid(e.url);
+          if (eVid && eVid === incomingVid) {
+            const startTime = new Date(e.created_at || e.timestamp_start).getTime();
+            const nowTime = new Date(eventData.timestamp_start).getTime();
+            return Math.abs(nowTime - startTime) < 5 * 60 * 1000;
+          }
+          return false;
+        });
+      }
 
-      // Run enrichment pipeline in the background to collect, enrich, and store
+      if (recentDup) {
+        const newDur = Math.max(Number(recentDup.duration_seconds) || 0, Number(eventData.duration_seconds) || 0);
+        await collections.raw_events.updateOne(
+          { _id: recentDup._id },
+          {
+            $set: {
+              duration_seconds: newDur,
+              timestamp_end: eventData.timestamp_end,
+              content_title: eventData.content_title || recentDup.content_title
+            }
+          }
+        );
+        console.log(`Merged duplicate watch event for user ${eventData.user_id}, video ${incomingVid}. Updated duration: ${newDur}s`);
+      } else {
+        await collections.raw_events.insertOne({
+          ...eventData,
+          created_at: new Date().toISOString(),
+        });
+        console.log(`Event stored for user ${eventData.user_id}. Platform: ${eventData.platform}`);
+      }
+
+      // Run enrichment pipeline in the background
       enrichEventPipeline(eventData, db).catch(err => {
         console.error("Error running enrichment pipeline in server:", err);
+      });
+
+      // Automatically run behavior profile processing so OCEAN traits are generated instantly
+      processDataForUser(eventData.user_id, collections).catch(err => {
+        console.error("Error auto-processing user behavior profile:", err);
       });
 
       // 3. Count events for this user
@@ -1029,8 +1066,10 @@ async function startServer() {
         return res.status(404).json({ status: "failed", error: "Extension package directory not found" });
       }
 
-      const { default: AdmZip } = await import("adm-zip");
-      const zip = new AdmZip();
+            // @ts-ignore
+      const AdmZipModule: any = await import("adm-zip");
+      const AdmZipClass: any = AdmZipModule.default || AdmZipModule;
+      const zip = new AdmZipClass();
       zip.addLocalFolder(extensionDir);
       const zipBuffer = zip.toBuffer();
 
@@ -1385,25 +1424,34 @@ async function startServer() {
       const events = await collections.raw_events.find({ user_id }).toArray();
       const enrichedEvents = await collections.enriched_events.find({ user_id }).toArray();
 
-      
-      if ((!features || !features.total_watch_time) && events.length > 0) {
-        const totalWatchTime = events.reduce((acc: number, e: any) => acc + (Number(e.duration_seconds) || 0), 0);
-        const avgSessionDuration = events.length > 0 ? totalWatchTime / events.length : 0;
+      if (events.length > 0) {
+        const liveTotalWatchTime = events.reduce((acc: number, e: any) => acc + (Number(e.duration_seconds) || 0), 0);
+        const liveAvgSession = events.length > 0 ? liveTotalWatchTime / events.length : 0;
         const sentimentScores = events.map((e: any) => getSentimentScore(e.content_title || e.url || ""));
-        const avgSentiment = events.length > 0 ? (sentimentScores.reduce((a: number, b: number) => a + b, 0) / events.length) : 0;
-        features = {
-          user_id,
-          total_events: events.length,
-          avg_session_duration: avgSessionDuration,
-          total_watch_time: totalWatchTime,
-          late_night_ratio: 0,
-          topic_diversity: 0.5,
-          learning_ratio: 0.5,
-          repetition_score: 0,
-          activity_consistency: 1,
-          avg_sentiment: avgSentiment,
-          processed_at: new Date().toISOString()
-        };
+        const liveAvgSentiment = events.length > 0 ? (sentimentScores.reduce((a: number, b: number) => a + b, 0) / events.length) : 0;
+
+        if (!features) {
+          features = {
+            user_id,
+            total_events: events.length,
+            avg_session_duration: liveAvgSession,
+            total_watch_time: liveTotalWatchTime,
+            late_night_ratio: 0,
+            topic_diversity: 0.5,
+            learning_ratio: 0.5,
+            repetition_score: 0,
+            activity_consistency: 1,
+            avg_sentiment: liveAvgSentiment,
+            processed_at: new Date().toISOString()
+          };
+        } else {
+          features.total_watch_time = Math.max(features.total_watch_time || 0, liveTotalWatchTime);
+          features.total_events = Math.max(features.total_events || 0, events.length);
+          features.avg_session_duration = liveAvgSession;
+          if (features.avg_sentiment === undefined || features.avg_sentiment === null) {
+            features.avg_sentiment = liveAvgSentiment;
+          }
+        }
       }
 
       // Build official title map

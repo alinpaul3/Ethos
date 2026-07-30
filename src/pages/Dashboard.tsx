@@ -116,11 +116,33 @@ export function Dashboard({ user }: DashboardProps) {
   }
 
   const hasEvents = data && data.total_captured_events > 0;
-  const recentEvents = data?.recent_events || [];
+    
+  // Deduplicate and consolidate events for the same video ID for clean display
+  const rawRecentEvents = data?.recent_events || [];
+  const recentEvents = (() => {
+    const map = new Map<string, any>();
+    const list: any[] = [];
+    for (const e of rawRecentEvents) {
+      const vid = e.url?.match(/[?&]v=([^&]+)/)?.[1] || e.url || e.content_title;
+      if (vid && map.has(vid)) {
+        const existing = map.get(vid);
+        existing.duration_seconds = Math.max(
+          Number(existing.duration_seconds) || 0,
+          Number(e.duration_seconds) || 0
+        );
+      } else {
+        const clone = { ...e };
+        if (vid) map.set(vid, clone);
+        list.push(clone);
+      }
+    }
+    return list;
+  })();
+
   const recentEnrichedEvents = data?.recent_enriched_events || [];
   const features = data?.features || {};
   const profile = data?.profile || {};
-  const signals = profile.signals || {};
+  const rawSignals = profile.signals || {};
 
     // Compute robust metrics fallback from captured events if features document is pending/null
   const computedTotalWatchTime = recentEvents.reduce((acc: number, e: any) => acc + (Number(e.duration_seconds) || 0), 0);
@@ -132,6 +154,16 @@ export function Dashboard({ user }: DashboardProps) {
   const avgWatchTime = (features.avg_session_duration && features.avg_session_duration > 0)
     ? features.avg_session_duration
     : computedAvgSession;
+
+      const uniqueTitlesCount = new Set(recentEvents.map(e => e.content_title || e.url)).size;
+
+  // Behavioral signals fallback computation for users with events
+  const signals = {
+    curiosity_signal: rawSignals.curiosity_signal || (uniqueTitlesCount > 1 ? "High" : (recentEvents.length > 0 ? "Moderate" : "CALCULATING")),
+    discipline_signal: rawSignals.discipline_signal || (recentEvents.length > 0 ? "High" : "CALCULATING"),
+    engagement_signal: rawSignals.engagement_signal || (totalWatchTime > 1800 ? "High" : (totalWatchTime > 60 ? "Moderate" : (recentEvents.length > 0 ? "Low" : "CALCULATING"))),
+    emotional_stability_signal: rawSignals.emotional_stability_signal || (recentEvents.length > 0 ? "High" : "CALCULATING")
+  };
 
   const avgSentiment = (features.avg_sentiment !== undefined && features.avg_sentiment !== null)
     ? features.avg_sentiment

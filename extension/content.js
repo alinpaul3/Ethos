@@ -34,6 +34,16 @@ function safeSendMessage(message, callback) {
 
 if (location.hostname.includes("youtube.com")) {
   // YouTube watch tracking logic
+    function getVideoId(urlStr) {
+    if (!urlStr) return null;
+    try {
+      const match = urlStr.match(/[?&]v=([^&]+)/);
+      return match ? match[1] : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function getTitle() {
      // Do NOT use og:title meta tag as YouTube SPA never updates it on internal navigation
     const h1 = document.querySelector('h1.style-scope.ytd-watch-metadata yt-formatted-string, #title h1, h1.ytd-watch-metadata, h1.title.ytd-video-primary-info-renderer, ytd-watch-metadata #title');
@@ -53,7 +63,16 @@ if (location.hostname.includes("youtube.com")) {
 
   function checkUrlChange() {
     if (lastUrl !== location.href) {
-      if (location.href.includes("youtube.com/watch")) {
+           const prevVid = getVideoId(lastUrl);
+      const newVid = getVideoId(location.href);
+
+      // If both are the exact same video ID (e.g. timestamp param &t=39s appended on pause or seek), ignore!
+      if (prevVid && newVid && prevVid === newVid) {
+        lastUrl = location.href;
+        return;
+      }
+
+        if (location.href.includes("youtube.com/watch") && newVid) {
         notifyStart();
       } else {
         notifyStop();
@@ -79,19 +98,48 @@ if (location.hostname.includes("youtube.com")) {
   function notifyStop() {
     safeSendMessage({ type: "WATCH_STOP" });
   }
+  
+  function notifyPause() {
+    safeSendMessage({ type: "WATCH_PAUSE", url: location.href });
+  }
 
   // Initial detection
   if (location.href.includes("youtube.com/watch")) {
     setTimeout(notifyStart, 1500);
   }
 
-  // Watch for navigation within YouTube SPA
-  setInterval(checkUrlChange, 1000);
+    // Watch for HTML5 video element play / pause events directly
+  let attachedVideo = null;
+  function attachVideoListeners() {
+    const video = document.querySelector('video.html5-main-video, video');
+    if (video && video !== attachedVideo) {
+      attachedVideo = video;
+      video.addEventListener('pause', () => {
+        if (location.href.includes("youtube.com/watch")) {
+          notifyPause();
+        }
+      });
+      video.addEventListener('play', () => {
+        if (location.href.includes("youtube.com/watch")) {
+          notifyStart();
+        }
+      });
+      video.addEventListener('ended', () => {
+        notifyStop();
+      });
+    }
+  }
+
+  // Watch for navigation & video changes within YouTube SPA
+  setInterval(() => {
+    checkUrlChange();
+    attachVideoListeners();
+  }, 1000);
 
   // Watch for visibility changes
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
-      notifyStop();
+      notifyPause();
     } else if (location.href.includes("youtube.com/watch")) {
       notifyStart();
     }
