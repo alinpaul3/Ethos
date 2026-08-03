@@ -22,9 +22,11 @@ const JWT_SECRET = process.env.JWT_SECRET || "default_secret_for_dev_only";
 
 // Middleware to verify JWT and attach user to req
 const authenticateToken = (req: any, res: any, next: any) => {
-  let token = req.cookies?.auth_token;
-  if (!token && req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+  let token = null;
+  if (req.headers?.authorization && req.headers.authorization.startsWith("Bearer ")) {
     token = req.headers.authorization.split(" ")[1];
+  } else if (req.cookies?.auth_token) {
+    token = req.cookies.auth_token;
   }
 
   if (!token) {

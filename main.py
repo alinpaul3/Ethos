@@ -137,10 +137,12 @@ def sanitize_doc(doc):
     return doc
 
 async def get_current_user(request: Request):
-    token = request.cookies.get("auth_token")
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    if not token and auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
+    token = None
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1].strip()
+    if not token:
+        token = request.cookies.get("auth_token")
 
     if not token:
         user_id = request.query_params.get("user_id")
@@ -1098,7 +1100,12 @@ async def generate_explanation(payload: Optional[PipelineStageRequest] = Body(No
 @app.get("/api/dashboard")
 async def get_dashboard(request: Request, user_id: Optional[str] = None):
     current_user_id = None
-    token = request.cookies.get("auth_token")
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    token = None
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1].strip()
+    if not token:
+        token = request.cookies.get("auth_token")
     if token:
         payload = decode_jwt(token)
         if payload and "user_id" in payload:
@@ -1239,7 +1246,12 @@ async def questionnaire_submit(payload: BfiSubmissionRequest, request: Request):
     try:
         user_id = payload.user_id
         if not user_id:
-            token = request.cookies.get("auth_token")
+            auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+            token = None
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.split(" ")[1].strip()
+            if not token:
+                token = request.cookies.get("auth_token")
             if token:
                 auth_data = decode_jwt(token)
                 if auth_data and "user_id" in auth_data:
@@ -1310,7 +1322,12 @@ async def questionnaire_submit(payload: BfiSubmissionRequest, request: Request):
 async def questionnaire_get(request: Request, user_id: Optional[str] = Query(None)):
     target_user_id = user_id
     if not target_user_id:
-        token = request.cookies.get("auth_token")
+        auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+        token = None
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1].strip()
+        if not token:
+            token = request.cookies.get("auth_token")
         if token:
             auth_data = decode_jwt(token)
             if auth_data and "user_id" in auth_data:
