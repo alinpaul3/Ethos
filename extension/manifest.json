@@ -11,8 +11,8 @@
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
-    "https://*.asia-east1.run.app/*",
     "https://*.run.app/*",
+    "https://*.asia-east1.run.app/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "<all_urls>"
@@ -24,8 +24,8 @@
     {
       "matches": [
         "https://www.youtube.com/*",
-        "https://*.asia-east1.run.app/*",
         "https://*.run.app/*",
+        "https://*.asia-east1.run.app/*",
         "http://localhost/*",
         "http://127.0.0.1/*",
         "<all_urls>"
@@ -35,6 +35,12 @@
     }
   ],
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
   }
 }
