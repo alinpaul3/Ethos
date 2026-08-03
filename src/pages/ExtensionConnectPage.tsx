@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Chrome, Copy, Check, Link as LinkIcon, AlertCircle, Download, ExternalLink, ArrowRight, Sparkles, CheckCircle2, ShieldCheck, Zap, Radio, Layers, Server, RefreshCw, HelpCircle, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { apiFetch, API_BASE_URL } from "../lib/api";
-import extensionIcon from "../assets/images/ethos_extension_icon_1785780445694.jpg";
+import ethosLogo from "../assets/images/ethos_app_icon_1785067621741.jpg";
 
 interface ExtensionConnectPageProps {
   user: { user_id: string; email: string };
@@ -212,7 +212,7 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
               <div className="flex items-start gap-4">
                 <img
-                  src={extensionIcon}
+                  src={ethosLogo}
                   alt="Ethos Chrome Extension Logo"
                   referrerPolicy="no-referrer"
                   className="w-16 h-16 rounded-2xl border border-amber-500/30 shadow-md object-cover shrink-0"
@@ -267,7 +267,7 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <img
-                  src={extensionIcon}
+                  src={ethosLogo}
                   alt="Ethos Extension Logo"
                   referrerPolicy="no-referrer"
                   className="w-9 h-9 rounded-xl border border-slate-200 shadow-xs object-cover"
