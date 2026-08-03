@@ -58,7 +58,7 @@ export function LoginPage({ onAuth }: LoginPageProps) {
       >
         <div className="mb-12">
           <span className="editorial-label">System Access</span>
-          <h1 className="editorial-heading">Authenticate Profile</h1>
+          <h1 className="editorial-heading">Sign In</h1>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-8">
@@ -96,13 +96,13 @@ export function LoginPage({ onAuth }: LoginPageProps) {
             type="submit"
             className="w-full editorial-btn-primary flex items-center justify-center gap-3 py-4"
           >
-            Authenticate <ArrowRight className="w-4 h-4" />
+            Sign In <ArrowRight className="w-4 h-4" />
           </button>
         </form>
 
         <div className="mt-12 pt-8 border-t border-[#1a1a1a]/5 text-center">
           <p className="text-[10px] uppercase tracking-widest text-[#1a1a1a]/40 font-bold">
-            Unauthorized? <Link to="/signup" className="text-[#1a1a1a] underline decoration-1 underline-offset-4 hover:opacity-70 transition-opacity">Provision New Node</Link>
+            Don't have an account? <Link to="/signup" className="text-[#1a1a1a] underline decoration-1 underline-offset-4 hover:opacity-70 transition-opacity">Sign Up</Link>
           </p>
         </div>
       </motion.div>

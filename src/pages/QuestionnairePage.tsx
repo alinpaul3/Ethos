@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { CheckCircle2, AlertCircle, ArrowRight } from "lucide-react";
 import { BFI44_QUESTIONS } from "../data/bfi44";
 import { apiFetch } from "../lib/api";
+
 interface QuestionnairePageProps {
   user: { user_id: string; email: string };
 }
@@ -76,7 +77,6 @@ export function QuestionnairePage({ user }: QuestionnairePageProps) {
 
       const res = await apiFetch("/questionnaire/submit", {
         method: "POST",
-        
         body: JSON.stringify({
           user_id: user.user_id,
           questionnaire_type: "BFI-44",
@@ -160,7 +160,7 @@ export function QuestionnairePage({ user }: QuestionnairePageProps) {
           </div>
 
           <p className="text-xs text-white/80">
-            Your answers have been stored in the <code className="text-emerald-300 font-mono">questionnaire_responses</code> collection and calculated into standard Big Five scale scores:
+            Your answers have been saved and calculated into standard Big Five scale scores:
           </p>
 
           {/* Scores breakdown */}

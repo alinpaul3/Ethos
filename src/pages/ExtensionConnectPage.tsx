@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Chrome, Copy, Check, Link as LinkIcon, AlertCircle, Download, ExternalLink, ArrowRight, Sparkles, CheckCircle2, ShieldCheck, Zap, Radio, Layers, Server, RefreshCw, HelpCircle, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { apiFetch, API_BASE_URL } from "../lib/api";
+import extensionIcon from "../assets/images/ethos_extension_icon_1785780445694.jpg";
 
 interface ExtensionConnectPageProps {
   user: { user_id: string; email: string };
@@ -209,14 +210,22 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
             <div className="absolute -top-12 -right-12 w-64 h-64 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
 
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Chrome className="w-6 h-6 text-amber-400" />
-                  <h2 className="text-xl font-bold text-white">Ethos Research Extension</h2>
+              <div className="flex items-start gap-4">
+                <img
+                  src={extensionIcon}
+                  alt="Ethos Chrome Extension Logo"
+                  referrerPolicy="no-referrer"
+                  className="w-16 h-16 rounded-2xl border border-amber-500/30 shadow-md object-cover shrink-0"
+                />
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Chrome className="w-5 h-5 text-amber-400" />
+                    <h2 className="text-xl font-bold text-white">Ethos Research Extension</h2>
+                  </div>
+                  <p className="text-xs text-slate-300 max-w-xl leading-relaxed">
+                    Available directly on the official Chrome Web Store. One click adds the extension to your browser and automatically links your volunteer profile securely.
+                  </p>
                 </div>
-                <p className="text-xs text-slate-300 max-w-xl leading-relaxed">
-                  Available directly on the official Chrome Web Store. One click adds the extension to your browser and automatically links your volunteer profile securely.
-                </p>
               </div>
 
               <a
@@ -256,9 +265,17 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
           {/* Developer / Manual Fallback Box */}
           <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <Download className="w-4 h-4 text-amber-600" />
-                <h3 className="text-sm font-bold text-slate-900">Developer & Offline Zip Package</h3>
+              <div className="flex items-center gap-3">
+                <img
+                  src={extensionIcon}
+                  alt="Ethos Extension Logo"
+                  referrerPolicy="no-referrer"
+                  className="w-9 h-9 rounded-xl border border-slate-200 shadow-xs object-cover"
+                />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Developer & Offline Zip Package</h3>
+                  <p className="text-[11px] text-slate-500">Ethos Chrome Extension Manifest v3</p>
+                </div>
               </div>
               <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full font-semibold">Unpacked Chrome Extension</span>
             </div>

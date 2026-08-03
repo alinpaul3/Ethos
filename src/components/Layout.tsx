@@ -22,7 +22,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
     try {
       await apiFetch("/api/auth/logout", { method: "POST" });
     } catch (err) {
-       console.error("Logout error:", err);
+      console.error("Logout error:", err);
     } finally {
       if (onLogout) {
         onLogout();
@@ -34,8 +34,8 @@ export function Layout({ user, onLogout }: LayoutProps) {
   const navItems = [
     { path: "/dashboard", label: "Telemetry Index", icon: <LayoutDashboard className="w-4 h-4" />, num: "01" },
     { path: "/questionnaire", label: "BFI-44 Survey", icon: <FileText className="w-4 h-4" />, num: "02" },
-    { path: "/consent", label: "Data Directives", icon: <ShieldCheck className="w-4 h-4" />, num: "03" },
-    { path: "/connect-extension", label: "Node Linkage", icon: <Chrome className="w-4 h-4" />, num: "04" },
+    { path: "/consent", label: "Consent", icon: <ShieldCheck className="w-4 h-4" />, num: "03" },
+    { path: "/connect-extension", label: "Download Extension", icon: <Chrome className="w-4 h-4" />, num: "04" },
   ];
 
   return (
@@ -116,7 +116,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
               className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-800/50 text-slate-400 hover:text-rose-400 text-xs font-mono uppercase tracking-wider transition-all cursor-pointer group"
             >
               <LogOut className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
-              Terminate Session
+              Log Out
             </button>
           )}
         </div>

@@ -58,7 +58,7 @@ export function SignupPage({ onAuth }: SignupPageProps) {
       >
         <div className="mb-12">
           <span className="editorial-label">Subject Assignment</span>
-          <h1 className="editorial-heading">Provision New Node</h1>
+          <h1 className="editorial-heading">Sign Up</h1>
         </div>
 
         <form onSubmit={handleSignup} className="space-y-8">
@@ -108,13 +108,13 @@ export function SignupPage({ onAuth }: SignupPageProps) {
             type="submit"
             className="w-full editorial-btn-primary flex items-center justify-center gap-3 py-4"
           >
-            Provision Account <UserPlus className="w-4 h-4" />
+            Sign Up <UserPlus className="w-4 h-4" />
           </button>
         </form>
 
         <div className="mt-12 pt-8 border-t border-[#1a1a1a]/5 text-center">
           <p className="text-[10px] uppercase tracking-widest text-[#1a1a1a]/40 font-bold">
-            Already Assigned? <Link to="/login" className="text-[#1a1a1a] underline decoration-1 underline-offset-4 hover:opacity-70 transition-opacity">Return to Access</Link>
+            Already have an account? <Link to="/login" className="text-[#1a1a1a] underline decoration-1 underline-offset-4 hover:opacity-70 transition-opacity">Sign In</Link>
           </p>
         </div>
       </motion.div>
