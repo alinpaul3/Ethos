@@ -1373,7 +1373,7 @@ async function startServer() {
         maxAge: 7 * 24 * 60 * 60 * 1000 
       });
       
-      res.json({ user_id, email, message: "User created successfully" });
+      res.json({ user_id, email, token, consent_given: false, message: "User created successfully" });
     } catch (error) {
       res.status(500).json({ message: "Error during signup" });
     }
@@ -1399,14 +1399,23 @@ async function startServer() {
         maxAge: 7 * 24 * 60 * 60 * 1000 
       });
 
-      res.json({ user_id: user.user_id, email: user.email });
+      const consentDoc = await collections.consents.findOne({ user_id: user.user_id });
+      const consent_given = consentDoc ? consentDoc.consent_given === true : false;
+
+      res.json({ user_id: user.user_id, email: user.email, token, consent_given });
     } catch (error) {
       res.status(500).json({ message: "Error during login" });
     }
   });
 
-  app.get("/api/auth/me", authenticateToken, (req: any, res) => {
-    res.json(req.user);
+  app.get("/api/auth/me", authenticateToken, async (req: any, res) => {
+    const collections = getCollections();
+    let consent_given = false;
+    if (collections) {
+      const consentDoc = await collections.consents.findOne({ user_id: req.user.user_id });
+      consent_given = consentDoc ? consentDoc.consent_given === true : false;
+    }
+    res.json({ user_id: req.user.user_id, email: req.user.email, consent_given });
   });
 
   app.post("/api/auth/logout", (req, res) => {
@@ -1461,8 +1470,8 @@ async function startServer() {
       const collections = getCollections();
       if (!collections) return res.status(500).json({ message: "Database unavailable" });
 
-      // Run automatic processing so features/profile are always up-to-date
-      await processDataForUser(user_id, collections).catch(err => {
+      // Run automatic processing in background so dashboard loads instantly
+      processDataForUser(user_id, collections).catch(err => {
         console.error("Auto-processing during dashboard fetch failed:", err);
       });
 

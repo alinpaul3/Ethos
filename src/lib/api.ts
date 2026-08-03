@@ -33,6 +33,14 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}): Pro
     headers.set('Content-Type', 'application/json');
   }
 
+  // Automatically attach stored JWT token to overcome cross-site cookie restrictions
+  if (typeof localStorage !== 'undefined') {
+    const storedToken = localStorage.getItem('ethos_token');
+    if (storedToken && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${storedToken}`);
+    }
+  }
+
   const config: RequestInit = {
     credentials: 'include',
     ...options,

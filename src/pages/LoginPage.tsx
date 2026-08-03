@@ -3,8 +3,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { LogIn, ArrowRight } from "lucide-react";
 import { motion } from "motion/react";
 import { apiFetch } from "../lib/api";
+
 interface LoginPageProps {
-  onAuth: (user: any) => void;
+  onAuth: (user: any, consentGiven?: boolean) => void;
 }
 
 export function LoginPage({ onAuth }: LoginPageProps) {
@@ -18,7 +19,6 @@ export function LoginPage({ onAuth }: LoginPageProps) {
     try {
       const res = await apiFetch("/api/auth/login", {
         method: "POST",
-        
         body: JSON.stringify({ email, password }),
       });
       
@@ -37,8 +37,13 @@ export function LoginPage({ onAuth }: LoginPageProps) {
         throw new Error(errorMsg);
       }
 
-      onAuth(data);
-      navigate("/dashboard");
+      const isConsentGiven = data.consent_given === true;
+      onAuth(data, isConsentGiven);
+      if (isConsentGiven) {
+        navigate("/dashboard");
+      } else {
+        navigate("/consent");
+      }
     } catch (err: any) {
       setError(err.message);
     }

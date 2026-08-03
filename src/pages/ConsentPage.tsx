@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Check, X } from "lucide-react";
 import { motion } from "motion/react";
 import { apiFetch } from "../lib/api";
+
 interface ConsentPageProps {
   user: { user_id: string; email: string };
   onConsentChange?: (given: boolean) => void;
@@ -37,12 +38,12 @@ export function ConsentPage({ user, onConsentChange }: ConsentPageProps) {
     try {
       const res = await apiFetch("/api/consent", {
         method: "POST",
-        
         body: JSON.stringify({ user_id: user.user_id, consent_given: given }),
       });
       
       if (res.ok) {
         setConsentGiven(given);
+        localStorage.setItem("ethos_consent_given", JSON.stringify(given));
         onConsentChange?.(given);
         if (given) {
           navigate("/connect-extension");

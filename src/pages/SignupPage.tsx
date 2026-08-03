@@ -3,8 +3,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { UserPlus, ArrowRight } from "lucide-react";
 import { motion } from "motion/react";
 import { apiFetch } from "../lib/api";
+
 interface SignupPageProps {
-  onAuth: (user: any) => void;
+  onAuth: (user: any, consentGiven?: boolean) => void;
 }
 
 export function SignupPage({ onAuth }: SignupPageProps) {
@@ -23,7 +24,6 @@ export function SignupPage({ onAuth }: SignupPageProps) {
     try {
       const res = await apiFetch("/api/auth/signup", {
         method: "POST",
-        
         body: JSON.stringify({ email, password }),
       });
       
@@ -42,8 +42,8 @@ export function SignupPage({ onAuth }: SignupPageProps) {
         throw new Error(errorMsg);
       }
 
-      onAuth(data);
-      navigate("/consent"); // Proceed to mandatory consent
+      onAuth(data, false);
+      navigate("/consent"); // Proceed to mandatory consent for newly created accounts
     } catch (err: any) {
       setError(err.message);
     }
