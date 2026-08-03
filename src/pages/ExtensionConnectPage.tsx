@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Chrome, Copy, Check, Link as LinkIcon, AlertCircle, Download, ExternalLink, ArrowRight, Sparkles, CheckCircle2, ShieldCheck, Zap, Radio, Layers, Server, RefreshCw, HelpCircle, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { apiFetch, API_BASE_URL } from "../lib/api";
-import ethosLogo from "../assets/images/ethos_app_icon_1785067621741.jpg";
+import ethosLogo from "../assets/images/ethos_app_icon.jpg";
 
 interface ExtensionConnectPageProps {
   user: { user_id: string; email: string };
