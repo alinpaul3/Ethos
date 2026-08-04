@@ -1,6 +1,7 @@
 let currentSession = null;
 const MOCK_USER_ID = "U123_TEST";
 const DEFAULT_SERVER_URL = "https://ethos-i8i4.onrender.com/events";
+
 let activeUserId = MOCK_USER_ID;
 let activeServerUrl = DEFAULT_SERVER_URL;
 
@@ -119,8 +120,19 @@ let finalizeTimer = null;
 function getVideoId(urlStr) {
   if (!urlStr) return null;
   try {
-    const match = urlStr.match(/[?&]v=([^&]+)/);
-    return match ? match[1] : null;
+    if (urlStr.includes("v=")) {
+      return urlStr.split("v=")[1].split("&")[0].split("#")[0];
+    }
+    if (urlStr.includes("youtube.com/shorts/")) {
+      return urlStr.split("youtube.com/shorts/")[1].split("?")[0].split("&")[0].split("#")[0];
+    }
+    if (urlStr.includes("youtu.be/")) {
+      return urlStr.split("youtu.be/")[1].split("?")[0].split("&")[0].split("#")[0];
+    }
+    if (urlStr.includes("youtube.com/embed/")) {
+      return urlStr.split("youtube.com/embed/")[1].split("?")[0].split("&")[0].split("#")[0];
+    }
+    return null;
   } catch (e) {
     return null;
   }
@@ -167,13 +179,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     currentSession = {
       user_id: activeUserId,
       platform: "youtube",
-      content_title: message.title,
+      content_title: message.title || "YouTube Video",
       url: message.url,
       timestamp_start: new Date().toISOString(),
-      ttabId: sender.tab ? sender.tab.id : null
+      tabId: sender.tab ? sender.tab.id : null
     };
-    console.log("Session initialized for user:", activeUserId, "title:", message.title);
-    } else if (message.type === "WATCH_PAUSE") {
+    console.log("Session initialized for user:", activeUserId, "title:", currentSession.content_title);
+  } else if (message.type === "WATCH_PAUSE") {
     console.log("Tracking pause requested.");
     if (currentSession && !finalizeTimer) {
       // 30 second grace period: if user unpauses or resumes within 30s, session is kept continuous
@@ -183,7 +195,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }, 30000);
     }
   } else if (message.type === "WATCH_STOP") {
-       console.log("Tracking stop requested.");
+    console.log("Tracking stop requested.");
     if (finalizeTimer) {
       clearTimeout(finalizeTimer);
       finalizeTimer = null;
@@ -205,7 +217,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (currentSession && currentSession.tabId === tabId && changeInfo.url) {
-    if (!changeInfo.url.includes("youtube.com/watch")) {
+    if (!changeInfo.url.includes("youtube.com/watch") && !changeInfo.url.includes("youtube.com/shorts/")) {
       if (finalizeTimer) {
         clearTimeout(finalizeTimer);
         finalizeTimer = null;
@@ -223,11 +235,16 @@ async function finalizeSession() {
   const durationSeconds = Math.round((endTime - startTime) / 1000);
 
   if (durationSeconds >= 5) {
+    let cleanUrl = currentSession.url || "https://www.youtube.com";
+    if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+      cleanUrl = "https://" + cleanUrl;
+    }
+
     const eventPayload = {
-      user_id: currentSession.user_id,
-      platform: currentSession.platform,
-      content_title: currentSession.content_title,
-      url: currentSession.url,
+      user_id: String(currentSession.user_id || "U123_TEST"),
+      platform: String(currentSession.platform || "youtube"),
+      content_title: String(currentSession.content_title || "YouTube Video"),
+      url: cleanUrl,
       timestamp_start: currentSession.timestamp_start,
       timestamp_end: endTime.toISOString(),
       duration_seconds: durationSeconds

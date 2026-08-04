@@ -1,10 +1,37 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Chrome, Copy, Check, Link as LinkIcon, AlertCircle, Download, ExternalLink, ArrowRight, Sparkles, CheckCircle2, ShieldCheck, Zap, Radio, Layers, Server, RefreshCw, HelpCircle, Lock } from "lucide-react";
+import { Chrome, Copy, Check, Link as LinkIcon, AlertCircle, Download, ExternalLink, ArrowRight, Sparkles, CheckCircle2, ShieldCheck, Zap, Radio, Layers, Server, RefreshCw, HelpCircle, Lock, Cpu } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { apiFetch, API_BASE_URL } from "../lib/api";
+import ethosLogo from "../assets/images/ethos_app_icon.jpg";
 
-const ethosLogo = "/ethos_app_icon.jpg";
+function EthosBrandBadge({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
+  const [imgFailed, setImgFailed] = useState(false);
+
+  const containerClasses =
+    size === "lg"
+      ? "w-16 h-16 rounded-2xl shadow-xl shadow-amber-500/20"
+      : "w-9 h-9 rounded-xl shadow-md shadow-amber-500/20";
+  const iconClasses = size === "lg" ? "w-8 h-8" : "w-5 h-5";
+
+  if (!imgFailed && ethosLogo) {
+    return (
+      <img
+        src={ethosLogo}
+        alt="Ethos Extension Logo"
+        referrerPolicy="no-referrer"
+        onError={() => setImgFailed(true)}
+        className={`${containerClasses} border border-amber-500/30 object-cover shrink-0`}
+      />
+    );
+  }
+
+  return (
+    <div className={`${containerClasses} bg-gradient-to-tr from-amber-500 via-orange-500 to-amber-300 flex items-center justify-center text-slate-950 shrink-0 border border-amber-300/30`}>
+      <Cpu className={`${iconClasses} font-bold`} />
+    </div>
+  );
+}
 
 interface ExtensionConnectPageProps {
   user: { user_id: string; email: string };
@@ -212,12 +239,7 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
 
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
               <div className="flex items-start gap-4">
-                <img
-                  src={ethosLogo}
-                  alt="Ethos Chrome Extension Logo"
-                  referrerPolicy="no-referrer"
-                  className="w-16 h-16 rounded-2xl border border-amber-500/30 shadow-md object-cover shrink-0"
-                />
+                <EthosBrandBadge size="lg" />
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2">
                     <Chrome className="w-5 h-5 text-amber-400" />
@@ -267,12 +289,7 @@ export function ExtensionConnectPage({ user }: ExtensionConnectPageProps) {
           <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <img
-                  src={ethosLogo}
-                  alt="Ethos Extension Logo"
-                  referrerPolicy="no-referrer"
-                  className="w-9 h-9 rounded-xl border border-slate-200 shadow-xs object-cover"
-                />
+                <EthosBrandBadge size="sm" />
                 <div>
                   <h3 className="text-sm font-bold text-slate-900">Developer & Offline Zip Package</h3>
                   <p className="text-[11px] text-slate-500">Ethos Chrome Extension Manifest v3</p>

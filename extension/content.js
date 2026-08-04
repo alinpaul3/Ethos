@@ -33,20 +33,36 @@ function safeSendMessage(message, callback) {
 }
 
 if (location.hostname.includes("youtube.com")) {
-  // YouTube watch tracking logic
-    function getVideoId(urlStr) {
+  // YouTube watch & shorts tracking logic
+  function getVideoId(urlStr) {
     if (!urlStr) return null;
     try {
-      const match = urlStr.match(/[?&]v=([^&]+)/);
-      return match ? match[1] : null;
+      if (urlStr.includes("v=")) {
+        return urlStr.split("v=")[1].split("&")[0].split("#")[0];
+      }
+      if (urlStr.includes("youtube.com/shorts/")) {
+        return urlStr.split("youtube.com/shorts/")[1].split("?")[0].split("&")[0].split("#")[0];
+      }
+      if (urlStr.includes("youtu.be/")) {
+        return urlStr.split("youtu.be/")[1].split("?")[0].split("&")[0].split("#")[0];
+      }
+      if (urlStr.includes("youtube.com/embed/")) {
+        return urlStr.split("youtube.com/embed/")[1].split("?")[0].split("&")[0].split("#")[0];
+      }
+      return null;
     } catch (e) {
       return null;
     }
   }
 
+  function isWatchOrShorts(urlStr) {
+    if (!urlStr) return false;
+    return urlStr.includes("youtube.com/watch") || urlStr.includes("youtube.com/shorts/");
+  }
+
   function getTitle() {
-     // Do NOT use og:title meta tag as YouTube SPA never updates it on internal navigation
-    const h1 = document.querySelector('h1.style-scope.ytd-watch-metadata yt-formatted-string, #title h1, h1.ytd-watch-metadata, h1.title.ytd-video-primary-info-renderer, ytd-watch-metadata #title');
+    // Do NOT use og:title meta tag as YouTube SPA never updates it on internal navigation
+    const h1 = document.querySelector('h1.style-scope.ytd-watch-metadata yt-formatted-string, #title h1, h1.ytd-watch-metadata, h1.title.ytd-video-primary-info-renderer, ytd-watch-metadata #title, ytd-reel-player-header-renderer h2, .ytd-reel-player-header-renderer');
     if (h1 && h1.innerText && h1.innerText.trim()) {
       return h1.innerText.replace(" - YouTube", "").trim();
     }
@@ -56,14 +72,18 @@ if (location.hostname.includes("youtube.com")) {
       return docTitle;
     }
 
-    return "";;
+    if (location.href.includes("/shorts/")) {
+      return "YouTube Short";
+    }
+
+    return "YouTube Video";
   }
 
   let lastUrl = location.href;
 
   function checkUrlChange() {
     if (lastUrl !== location.href) {
-           const prevVid = getVideoId(lastUrl);
+      const prevVid = getVideoId(lastUrl);
       const newVid = getVideoId(location.href);
 
       // If both are the exact same video ID (e.g. timestamp param &t=39s appended on pause or seek), ignore!
@@ -72,7 +92,7 @@ if (location.hostname.includes("youtube.com")) {
         return;
       }
 
-        if (location.href.includes("youtube.com/watch") && newVid) {
+      if (isWatchOrShorts(location.href) && newVid) {
         notifyStart();
       } else {
         notifyStop();
@@ -84,43 +104,41 @@ if (location.hostname.includes("youtube.com")) {
   function notifyStart() {
     // Delay slightly to allow YouTube SPA to finish DOM title updates on new video load
     setTimeout(() => {
-    const title = getTitle();
-    if (title) {
+      const title = getTitle() || "YouTube Video";
       safeSendMessage({
         type: "WATCH_START",
         url: location.href,
         title: title
       });
-    }
     }, 1200);
   }
 
   function notifyStop() {
     safeSendMessage({ type: "WATCH_STOP" });
   }
-  
+
   function notifyPause() {
     safeSendMessage({ type: "WATCH_PAUSE", url: location.href });
   }
 
   // Initial detection
-  if (location.href.includes("youtube.com/watch")) {
+  if (isWatchOrShorts(location.href)) {
     setTimeout(notifyStart, 1500);
   }
 
-    // Watch for HTML5 video element play / pause events directly
+  // Watch for HTML5 video element play / pause events directly
   let attachedVideo = null;
   function attachVideoListeners() {
     const video = document.querySelector('video.html5-main-video, video');
     if (video && video !== attachedVideo) {
       attachedVideo = video;
       video.addEventListener('pause', () => {
-        if (location.href.includes("youtube.com/watch")) {
+        if (isWatchOrShorts(location.href)) {
           notifyPause();
         }
       });
       video.addEventListener('play', () => {
-        if (location.href.includes("youtube.com/watch")) {
+        if (isWatchOrShorts(location.href)) {
           notifyStart();
         }
       });
@@ -140,7 +158,7 @@ if (location.hostname.includes("youtube.com")) {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       notifyPause();
-    } else if (location.href.includes("youtube.com/watch")) {
+    } else if (isWatchOrShorts(location.href)) {
       notifyStart();
     }
   });
@@ -156,7 +174,7 @@ if (location.hostname.includes("youtube.com")) {
       if (window.location.hostname.includes("ethos-analysis.onrender.com")) {
         return "https://ethos-i8i4.onrender.com/events";
       }
-       if (window.location.origin && window.location.origin !== "null") {
+      if (window.location.origin && window.location.origin !== "null") {
         return `${window.location.origin.replace(/\/$/, "")}/events`;
       }
     }
@@ -204,7 +222,6 @@ if (location.hostname.includes("youtube.com")) {
       if (message.type === "FORWARD_EVENT") {
         console.log("Forwarding event from background script via backup tabs.sendMessage:", message.payload);
         
-        // Fetch from the page's own context to bypass any proxy auth/same-site cookie restrictions
         fetch(getBackendEventsUrl(), {
           method: "POST",
           headers: {
@@ -232,7 +249,7 @@ if (location.hostname.includes("youtube.com")) {
   }
 
   window.addEventListener("message", (event) => {
-       if (event.data && event.data.type === "ETHOS_EXTENSION_PING") {
+    if (event.data && event.data.type === "ETHOS_EXTENSION_PING") {
       window.postMessage({ type: "ETHOS_EXTENSION_PONG" }, "*");
     }
     if (event.data && event.data.type === "ETHOS_CONNECT_REQUEST") {

@@ -552,6 +552,16 @@ async function startServer() {
       const collections = getCollections();
       if (!collections) return res.status(500).json({ message: "Database unavailable" });
 
+      // Sanitize req.body prior to validation
+      if (req.body) {
+        if (!req.body.content_title || typeof req.body.content_title !== "string" || !req.body.content_title.trim()) {
+          req.body.content_title = "YouTube Video";
+        }
+        if (req.body.url && typeof req.body.url === "string" && !req.body.url.startsWith("http://") && !req.body.url.startsWith("https://")) {
+          req.body.url = "https://" + req.body.url;
+        }
+      }
+
       // 1. Validation (Pydantic-like behavior via Zod)
       const eventData = eventSchema.parse(req.body);
       
