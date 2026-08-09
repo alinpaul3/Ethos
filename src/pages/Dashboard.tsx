@@ -30,7 +30,7 @@ export function Dashboard({ user }: DashboardProps) {
     else setRefreshing(true);
     
     try {
-      const res = await apiFetch(`/api/dashboard-data?user_id=${user.user_id}`);
+      const res = await apiFetch("/api/dashboard-data");
       const contentType = res.headers.get("content-type");
       
       if (!res.ok) {
@@ -40,6 +40,9 @@ export function Dashboard({ user }: DashboardProps) {
         throw new Error("Server returned an invalid response format.");
       }
       const json = await res.json();
+      if (json.user_id !== user.user_id) {
+        throw new Error("Dashboard data was returned for a different authenticated user.");
+      }
       setData(json);
       setError("");
     } catch (err: any) {
@@ -60,7 +63,7 @@ export function Dashboard({ user }: DashboardProps) {
       fetchDashboardData(true);
     }, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user.user_id]);
 
   const handleSimulateEvent = async () => {
     setSimulating(true);
@@ -117,27 +120,8 @@ export function Dashboard({ user }: DashboardProps) {
 
   const hasEvents = data && data.total_captured_events > 0;
   
-  // Deduplicate and consolidate events for the same video ID for clean display
-  const rawRecentEvents = data?.recent_events || [];
-  const recentEvents = (() => {
-    const map = new Map<string, any>();
-    const list: any[] = [];
-    for (const e of rawRecentEvents) {
-      const vid = e.url?.match(/[?&]v=([^&]+)/)?.[1] || e.url || e.content_title;
-      if (vid && map.has(vid)) {
-        const existing = map.get(vid);
-        existing.duration_seconds = Math.max(
-          Number(existing.duration_seconds) || 0,
-          Number(e.duration_seconds) || 0
-        );
-      } else {
-        const clone = { ...e };
-        if (vid) map.set(vid, clone);
-        list.push(clone);
-      }
-    }
-    return list;
-  })();
+  // Raw Telemetry is an audit view: retain every historical raw event returned by the API.
+  const recentEvents = data?.recent_events || [];
 
   const recentEnrichedEvents = data?.recent_enriched_events || [];
   const features = data?.features || {};
@@ -802,4 +786,3 @@ function StatCard({ icon, label, value, badge, color }: { icon: React.ReactNode;
     </div>
   );
 }
-

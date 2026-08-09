@@ -546,75 +546,20 @@ async def store_event(event: EventPayload, background_tasks: BackgroundTasks):
     event_dict["url"] = str(event_dict["url"])
     event_dict["created_at"] = datetime.utcnow().isoformat()
     
-    # Enhanced deduplication for pause/play events & same video/title session (within 30 mins)
-    def extract_vid(u):
-        if not u:
-            return None
-        if "v=" in u:
-            return u.split("v=")[1].split("&")[0]
-        if "youtu.be/" in u:
-            return u.split("youtu.be/")[1].split("?")[0].split("&")[0]
-        if "youtube.com/shorts/" in u:
-            return u.split("youtube.com/shorts/")[1].split("?")[0].split("&")[0]
-        if "youtube.com/embed/" in u:
-            return u.split("youtube.com/embed/")[1].split("?")[0].split("&")[0]
-        return None
+    # A raw event represents one finalized watch session. Retries carry the same
+    # immutable session payload, while a later watch has a new timestamp_start.
+    event_identity = {
+        "user_id": event.user_id,
+        "platform": event.platform,
+        "url": event_dict["url"],
+        "timestamp_start": event.timestamp_start,
+        "timestamp_end": event.timestamp_end,
+        "duration_seconds": event.duration_seconds,
+    }
+    duplicate_event = await db.raw_events.find_one(event_identity)
 
-    incoming_vid = extract_vid(event_dict.get("url", ""))
-    incoming_title = clean_title(event_dict.get("content_title", ""))
-
-    recent_dup = None
-    existing_user_events = await db.raw_events.find({"user_id": event.user_id}).to_list(200)
-
-    def parse_event_time(e):
-        ts = e.get("updated_at") or e.get("timestamp_end") or e.get("created_at") or e.get("timestamp_start")
-        if not ts:
-            return 0.0
-        try:
-            if isinstance(ts, (datetime, date)):
-                return ts.timestamp()
-            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-            return dt.timestamp()
-        except Exception:
-            return 0.0
-
-    sorted_existing = sorted(existing_user_events, key=parse_event_time, reverse=True)
-    now_ts = datetime.utcnow().timestamp()
-
-    for e in sorted_existing:
-        e_vid = extract_vid(e.get("url", ""))
-        e_title = clean_title(e.get("content_title", ""))
-
-        is_match = False
-        if incoming_vid and e_vid and incoming_vid == e_vid:
-            is_match = True
-        elif incoming_title and e_title and incoming_title == e_title:
-            is_match = True
-        elif event_dict.get("url") and e.get("url") and event_dict["url"].split("?")[0] == e["url"].split("?")[0]:
-            is_match = True
-
-        if is_match:
-            last_activity = parse_event_time(e)
-            # Match if last activity on this video session was within 30 minutes (1800s)
-            if (now_ts - last_activity < 1800) or last_activity == 0.0:
-                recent_dup = e
-                break
-
-    if recent_dup:
-        new_dur = max(safe_float(recent_dup.get("duration_seconds")), safe_float(event_dict.get("duration_seconds")))
-        update_fields = {
-            "duration_seconds": new_dur,
-            "timestamp_end": event_dict.get("timestamp_end") or datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        if event_dict.get("content_title"):
-            update_fields["content_title"] = event_dict["content_title"]
-
-        await db.raw_events.update_one(
-            {"_id": recent_dup["_id"]},
-            {"$set": update_fields}
-        )
-        logger.info(f"Merged duplicate/pause watch event for user {event.user_id}, video/title '{incoming_title or incoming_vid}'. New duration: {new_dur}s")
+    if duplicate_event:
+        logger.info(f"Ignored retry of existing watch event for user {event.user_id}")
     else:
         event_dict["updated_at"] = datetime.utcnow().isoformat()
         await db.raw_events.insert_one(event_dict)
@@ -1111,10 +1056,10 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
         if payload and "user_id" in payload:
             current_user_id = payload["user_id"]
     
-    target_user_id = user_id or current_user_id
-    if not target_user_id:
-        # Fallback to test_user or first user if available
-        target_user_id = "test_user"
+    # Dashboard history is always scoped to the authenticated identity.
+    if not current_user_id:
+        return JSONResponse(status_code=401, content={"message": "Authentication required"})
+    target_user_id = current_user_id
 
     if db is None:
         return {
@@ -1128,8 +1073,8 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
         }
 
     try:
-        raw_events = await db.raw_events.find({"user_id": target_user_id}).to_list(1000)
-        enriched_events = await db.enriched_events.find({"user_id": target_user_id}).to_list(1000)
+        raw_events = await db.raw_events.find({"user_id": target_user_id}).to_list(None)
+        enriched_events = await db.enriched_events.find({"user_id": target_user_id}).to_list(None)
 
         # Auto-compute profile in background if missing or signals contain 'CALCULATING' while raw_events exist
         profile = await db.behavior_profiles.find_one({"user_id": target_user_id})
@@ -1227,8 +1172,8 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
             "features": sanitize_doc(features),
             "profile": sanitize_doc(profile),
             "questionnaire_response": sanitize_doc(questionnaire),
-            "recent_events": sanitize_doc(sorted_events[:50]),
-            "recent_enriched_events": sanitize_doc(sorted_enriched[:50]),
+            "recent_events": sanitize_doc(sorted_events),
+            "recent_enriched_events": sanitize_doc(sorted_enriched),
             "total_captured_events": len(raw_events)
         }
     except Exception as err:
@@ -1630,6 +1575,3 @@ async def plot_mae():
     if os.path.exists(plot_path):
         return FileResponse(plot_path, media_type="image/png")
     return Response(content="MAE plot not found", status_code=404)
-
-
-

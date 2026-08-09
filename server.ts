@@ -52,6 +52,24 @@ const authenticateToken = (req: any, res: any, next: any) => {
   });
 };
 
+// Dashboard history must never be selected from a caller-controlled user_id.
+const authenticateDashboardToken = (req: any, res: any, next: any) => {
+  const authorization = req.headers?.authorization;
+  const token = authorization?.startsWith("Bearer ")
+    ? authorization.split(" ")[1]
+    : req.cookies?.auth_token;
+
+  if (!token) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
+    if (err) return res.status(403).json({ message: "Invalid or expired token" });
+    req.user = user;
+    next();
+  });
+};
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -565,69 +583,20 @@ async function startServer() {
       // 1. Validation (Pydantic-like behavior via Zod)
       const eventData = eventSchema.parse(req.body);
       
-      // 2. Extract video ID & clean title helper
-      const extractVid = (u: string) => {
-        if (!u) return null;
-        if (u.includes("v=")) return u.split("v=")[1].split("&")[0];
-        if (u.includes("youtu.be/")) return u.split("youtu.be/")[1].split("?")[0].split("&")[0];
-        if (u.includes("youtube.com/shorts/")) return u.split("youtube.com/shorts/")[1].split("?")[0].split("&")[0];
-        if (u.includes("youtube.com/embed/")) return u.split("youtube.com/embed/")[1].split("?")[0].split("&")[0];
-        return null;
+      // A raw event represents one finalized watch session. Retries use the
+      // exact same payload; separate watches receive a new timestamp_start.
+      const eventIdentity = {
+        user_id: eventData.user_id,
+        platform: eventData.platform,
+        url: eventData.url,
+        timestamp_start: eventData.timestamp_start,
+        timestamp_end: eventData.timestamp_end,
+        duration_seconds: eventData.duration_seconds,
       };
+      const duplicateEvent = await collections.raw_events.findOne(eventIdentity);
 
-      const incomingVid = extractVid(eventData.url);
-      const incomingTitle = cleanTitle(eventData.content_title || "");
-
-      // Check if a raw_event for the same user and video ID / URL / Title occurred recently (within 30 minutes)
-      const existingEvents = await collections.raw_events.find({ user_id: eventData.user_id }).toArray();
-
-      const getEventTime = (e: any) => {
-        const ts = e.updated_at || e.timestamp_end || e.created_at || e.timestamp_start;
-        if (!ts) return 0;
-        const t = new Date(ts).getTime();
-        return isNaN(t) ? 0 : t;
-      };
-
-      const sortedExisting = existingEvents.sort((a: any, b: any) => getEventTime(b) - getEventTime(a));
-      const nowMs = Date.now();
-
-      let recentDup: any = null;
-      for (const e of sortedExisting) {
-        const eVid = extractVid(e.url);
-        const eTitle = cleanTitle(e.content_title || "");
-
-        let isMatch = false;
-        if (incomingVid && eVid && incomingVid === eVid) {
-          isMatch = true;
-        } else if (incomingTitle && eTitle && incomingTitle === eTitle) {
-          isMatch = true;
-        } else if (eventData.url && e.url && eventData.url.split("?")[0] === e.url.split("?")[0]) {
-          isMatch = true;
-        }
-
-        if (isMatch) {
-          const lastTime = getEventTime(e);
-          if (nowMs - lastTime < 30 * 60 * 1000 || lastTime === 0) {
-            recentDup = e;
-            break;
-          }
-        }
-      }
-
-      if (recentDup) {
-        const newDur = Math.max(Number(recentDup.duration_seconds) || 0, Number(eventData.duration_seconds) || 0);
-        await collections.raw_events.updateOne(
-          { _id: recentDup._id },
-          {
-            $set: {
-              duration_seconds: newDur,
-              timestamp_end: eventData.timestamp_end || new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              content_title: eventData.content_title || recentDup.content_title
-            }
-          }
-        );
-        console.log(`Merged duplicate watch event for user ${eventData.user_id}, video/title '${incomingTitle || incomingVid}'. Updated duration: ${newDur}s`);
+      if (duplicateEvent) {
+        console.log(`Ignored retry of existing watch event for user ${eventData.user_id}`);
       } else {
         await collections.raw_events.insertOne({
           ...eventData,
@@ -1567,8 +1536,8 @@ async function startServer() {
         features: features || null,
         profile: profile || null,
         questionnaire_response: questionnaire || null,
-        recent_events: sortedEvents.slice(0, 50),
-        recent_enriched_events: sortedEnrichedEvents.slice(0, 50),
+        recent_events: sortedEvents,
+        recent_enriched_events: sortedEnrichedEvents,
         total_captured_events: events.length
       });
     } catch (error) {
@@ -1577,8 +1546,8 @@ async function startServer() {
     }
   };
 
-  app.get("/api/dashboard-data", checkDb, handleDashboardData);
-  app.get("/api/dashboard", checkDb, handleDashboardData);
+  app.get("/api/dashboard-data", authenticateDashboardToken, checkDb, handleDashboardData);
+  app.get("/api/dashboard", authenticateDashboardToken, checkDb, handleDashboardData);
 
   // Extension verification
   app.post("/api/verify-extension", authenticateToken, async (req, res) => {
