@@ -7,7 +7,28 @@ let activeUserId = MOCK_USER_ID;
 
 let appPorts = [];
 
-// Listen for persistent port connections from the application's content script context (works perfectly inside iframes too!)
+function createSession(message, sender) {
+  return {
+    user_id: activeUserId,
+    platform: "youtube",
+    content_title: message.title || "YouTube Video",
+    url: message.url,
+    timestamp_start: new Date().toISOString(),
+    tabId: sender.tab ? sender.tab.id : null,
+    is_playing: true,
+    last_playback_start: Date.now(),
+    watch_time_ms: 0
+  };
+}
+
+function accumulatePlaybackTime() {
+  if (currentSession && currentSession.is_playing && currentSession.last_playback_start) {
+    currentSession.watch_time_ms += Date.now() - currentSession.last_playback_start;
+    currentSession.last_playback_start = null;
+    currentSession.is_playing = false;
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "ethos-app-bridge") {
     console.log("Application node connected via persistent port:", port);
@@ -111,8 +132,6 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-let finalizeTimer = null;
-
 function getVideoId(urlStr) {
   if (!urlStr) return null;
   try {
@@ -146,51 +165,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const newVid = getVideoId(message.url);
     const currVid = currentSession ? getVideoId(currentSession.url) : null;
 
-    // If already tracking the exact same video ID, cancel any pending pause timer and preserve session
+    // Same video resume: preserve session and resume playback time accumulation
     if (currentSession && currVid && newVid && currVid === newVid) {
-      console.log("Same video already being tracked. Preserving current session for video ID:", currVid);
+      console.log("Same video already being tracked. Resuming current session for video ID:", currVid);
       currentSession.content_title = message.title || currentSession.content_title;
       currentSession.url = message.url || currentSession.url;
-      if (finalizeTimer) {
-        clearTimeout(finalizeTimer);
-        finalizeTimer = null;
+      if (!currentSession.is_playing) {
+        currentSession.is_playing = true;
+        currentSession.last_playback_start = Date.now();
       }
       sendResponse({ success: true, resumed: true });
       return true;
     }
 
-    if (finalizeTimer) {
-      clearTimeout(finalizeTimer);
-      finalizeTimer = null;
-    }
-
     if (currentSession) {
       finalizeSession();
     }
-    
-    currentSession = {
-      user_id: activeUserId,
-      platform: "youtube",
-      content_title: message.title || "YouTube Video",
-      url: message.url,
-      timestamp_start: new Date().toISOString(),
-      tabId: sender.tab ? sender.tab.id : null
-    };
+
+    currentSession = createSession(message, sender);
     console.log("Session initialized for user:", activeUserId, "title:", currentSession.content_title);
   } else if (message.type === "WATCH_PAUSE") {
     console.log("Tracking pause requested.");
-    if (currentSession && !finalizeTimer) {
-      // 30 second grace period: if user unpauses or resumes within 30s, session is kept continuous
-      finalizeTimer = setTimeout(() => {
-        finalizeSession();
-        finalizeTimer = null;
-      }, 30000);
+    if (currentSession) {
+      accumulatePlaybackTime();
     }
   } else if (message.type === "WATCH_STOP") {
     console.log("Tracking stop requested.");
-    if (finalizeTimer) {
-      clearTimeout(finalizeTimer);
-      finalizeTimer = null;
+    if (currentSession) {
+      accumulatePlaybackTime();
     }
     finalizeSession();
   }
@@ -199,10 +201,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (currentSession && currentSession.tabId === tabId) {
-    if (finalizeTimer) {
-      clearTimeout(finalizeTimer);
-      finalizeTimer = null;
-    }
     finalizeSession();
   }
 });
@@ -210,10 +208,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (currentSession && currentSession.tabId === tabId && changeInfo.url) {
     if (!changeInfo.url.includes("youtube.com/watch") && !changeInfo.url.includes("youtube.com/shorts/")) {
-      if (finalizeTimer) {
-        clearTimeout(finalizeTimer);
-        finalizeTimer = null;
-      }
       finalizeSession();
     }
   }
@@ -222,9 +216,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 async function finalizeSession() {
   if (!currentSession) return;
 
+  if (currentSession.is_playing) {
+    accumulatePlaybackTime();
+  }
+
   const endTime = new Date();
-  const startTime = new Date(currentSession.timestamp_start);
-  const durationSeconds = Math.round((endTime - startTime) / 1000);
+  const durationSeconds = Math.round((currentSession.watch_time_ms || 0) / 1000);
 
   if (durationSeconds >= 5) {
     let cleanUrl = currentSession.url || "https://www.youtube.com";
