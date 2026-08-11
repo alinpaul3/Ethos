@@ -1,9 +1,9 @@
+importScripts("config.js");
+
 let currentSession = null;
 const MOCK_USER_ID = "U123_TEST";
-const DEFAULT_SERVER_URL = "https://ethos-i8i4.onrender.com/events";
 
 let activeUserId = MOCK_USER_ID;
-let activeServerUrl = DEFAULT_SERVER_URL;
 
 let appPorts = [];
 
@@ -86,16 +86,16 @@ async function syncCachedEvents(port) {
 
 // Initialize on startup safely
 try {
-  chrome.storage.local.get(["user_id", "server_url"], (result) => {
+  chrome.storage.local.get(["user_id"], (result) => {
     if (chrome.runtime.lastError) {
       console.warn("Storage retrieval runtime error:", chrome.runtime.lastError.message);
       return;
     }
     if (result) {
       if (result.user_id) activeUserId = result.user_id;
-      if (result.server_url) activeServerUrl = result.server_url;
     }
-    console.log("Loaded credentials from storage:", activeUserId, activeServerUrl);
+    chrome.storage.local.remove("server_url");
+    console.log("Loaded Subject ID from storage:", activeUserId);
   });
 } catch (err) {
   console.error("Failed to query chrome.storage.local on startup:", err);
@@ -107,10 +107,6 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     if (changes.user_id) {
       activeUserId = changes.user_id.newValue || MOCK_USER_ID;
       console.log("Updated activeUserId:", activeUserId);
-    }
-    if (changes.server_url) {
-      activeServerUrl = changes.server_url.newValue || DEFAULT_SERVER_URL;
-      console.log("Updated activeServerUrl:", activeServerUrl);
     }
   }
 });
@@ -141,12 +137,8 @@ function getVideoId(urlStr) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SET_CONNECTION") {
     activeUserId = message.user_id;
-    activeServerUrl = message.server_url;
-    chrome.storage.local.set({ 
-      user_id: message.user_id,
-      server_url: message.server_url 
-    }, () => {
-      console.log("Connection saved in extension:", message.user_id, message.server_url);
+    chrome.storage.local.set({ user_id: message.user_id }, () => {
+      console.log("Subject ID saved in extension:", message.user_id);
     });
     sendResponse({ success: true });
   } else if (message.type === "WATCH_START") {
@@ -299,11 +291,7 @@ async function finalizeSession() {
       const potentialTabs = (tabs || []).filter(tab => {
         if (!tab.url) return false;
         const url = tab.url.toLowerCase();
-        return url.includes("localhost") || 
-               url.includes("127.0.0.1") || 
-               url.includes(".run.app") || 
-               url.includes("aistudio.google.com") || 
-               url.includes("ai.studio");
+        return url.includes("ethos-analysis.onrender.com");
       });
 
       if (potentialTabs && potentialTabs.length > 0) {
@@ -341,7 +329,7 @@ async function finalizeSession() {
       // 3. Tertiary Fallback: Direct fetch if forwarding is completely unavailable (e.g. no app pages open in browser at all)
       console.log("No active app tabs or ports found. Falling back to direct fetch...");
       try {
-        const response = await fetch(activeServerUrl, {
+        const response = await fetch(ETHOS_EVENTS_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
@@ -361,7 +349,7 @@ async function finalizeSession() {
           }
         }
       } catch (error) {
-        console.error("Failed to send event to:", activeServerUrl, error);
+        console.error("Failed to send event to production backend:", ETHOS_EVENTS_URL, error);
         // Store temporarily if failed
         chrome.storage.local.set({ ["failed_event_" + Date.now()]: eventPayload });
       }

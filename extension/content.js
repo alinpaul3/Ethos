@@ -166,21 +166,6 @@ if (location.hostname.includes("youtube.com")) {
   // Application page connection bridge
   console.log("Ethos content script loaded on application page. Listening for node linkage...");
   
-  function getBackendEventsUrl() {
-    if (typeof window !== "undefined" && window.location) {
-      if (window.ETHOS_API_BASE_URL) {
-        return `${window.ETHOS_API_BASE_URL.replace(/\/$/, "")}/events`;
-      }
-      if (window.location.hostname.includes("ethos-analysis.onrender.com")) {
-        return "https://ethos-i8i4.onrender.com/events";
-      }
-      if (window.location.origin && window.location.origin !== "null") {
-        return `${window.location.origin.replace(/\/$/, "")}/events`;
-      }
-    }
-    return "/events";
-  }
-
   // Establish persistent port connection (extremely robust for iframes and cross-frame syncing)
   if (typeof chrome !== "undefined" && chrome.runtime) {
     try {
@@ -190,7 +175,7 @@ if (location.hostname.includes("youtube.com")) {
         if (message.type === "FORWARD_EVENT") {
           console.log("Forwarding event from background script via persistent port:", message.payload);
           
-          fetch(getBackendEventsUrl(), {
+          fetch(ETHOS_EVENTS_URL, {
             method: "POST",
             headers: {
               "Content-Type": "application/json"
@@ -222,7 +207,7 @@ if (location.hostname.includes("youtube.com")) {
       if (message.type === "FORWARD_EVENT") {
         console.log("Forwarding event from background script via backup tabs.sendMessage:", message.payload);
         
-        fetch(getBackendEventsUrl(), {
+        fetch(ETHOS_EVENTS_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
@@ -254,16 +239,11 @@ if (location.hostname.includes("youtube.com")) {
     }
     if (event.data && event.data.type === "ETHOS_CONNECT_REQUEST") {
       const userId = event.data.user_id;
-      let serverUrl = event.data.server_url;
-      if (serverUrl && serverUrl.includes("ais-dev-")) {
-        serverUrl = serverUrl.replace("ais-dev-", "ais-pre-");
-      }
       safeSendMessage({
         type: "SET_CONNECTION",
-        user_id: userId,
-        server_url: serverUrl
+        user_id: userId
       }, (response) => {
-        console.log("Connection credentials saved to extension:", { userId, serverUrl });
+        console.log("Subject ID saved to extension:", { userId });
       });
     }
   });
