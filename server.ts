@@ -611,61 +611,14 @@ async function startServer() {
         console.error("Error running enrichment pipeline in server:", err);
       });
 
-      // Automatically run behavior profile processing so OCEAN traits are generated instantly
-      processDataForUser(eventData.user_id, collections).catch(err => {
-        console.error("Error auto-processing user behavior profile:", err);
+      // Run runtime pipeline coordinator in background
+      runPipelineForUser(eventData.user_id, collections).catch(err => {
+        console.error("Error running user pipeline:", err);
       });
-
-      // 3. Count events for this user
-      const eventCount = await collections.raw_events.countDocuments({ user_id: eventData.user_id });
-      console.log(`User ${eventData.user_id} total valid events: ${eventCount}`);
-
-      // 4. Threshold & Trigger Logic
-      if (eventCount >= PROCESSING_THRESHOLD) {
-        const status = await collections.processing_status.findOne({ user_id: eventData.user_id });
-        
-        if (!status || !status.processing_triggered) {
-          console.log(`Threshold reached for ${eventData.user_id} (${eventCount} events). Triggering n8n...`);
-          
-          const triggerPayload = {
-            user_id: eventData.user_id,
-            event_count: eventCount,
-            triggered_at: new Date().toISOString()
-          };
-
-          // Update DB first to prevent race condition duplicates
-          await collections.processing_status.updateOne(
-            { user_id: eventData.user_id },
-            { 
-              $set: { 
-                processing_triggered: true, 
-                last_triggered_at: triggerPayload.triggered_at,
-                total_events: eventCount 
-              } 
-            },
-            { upsert: true }
-          );
-
-          // 5. n8n Integration (Webhook)
-          if (N8N_WEBHOOK_URL) {
-            fetch(N8N_WEBHOOK_URL, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(triggerPayload)
-            }).then(n8nRes => {
-              if (n8nRes.ok) console.log("n8n processing triggered successfully");
-              else console.error("n8n trigger failed:", n8nRes.status, n8nRes.statusText);
-            }).catch(err => {
-              console.error("Error calling n8n webhook:", err);
-            });
-          } else {
-            console.warn("N8N_WEBHOOK_URL not set. Trigger skipped.");
-          }
-        }
-      }
 
       res.status(201).json({ message: "Event stored" });
     } catch (error) {
+
       if (error instanceof z.ZodError) {
         console.warn("Invalid event rejected:", error.issues);
         return res.status(400).json({ message: "Invalid event data", errors: error.issues });
@@ -744,9 +697,176 @@ async function startServer() {
       { $set: behaviorProfile },
       { upsert: true }
     );
-
     console.log(`Processing completed for user: ${user_id}. Signals generated.`);
     return { features: userFeatures, profile: behaviorProfile };
+  };
+
+  const calculateOceanScores = (features: any) => {
+    const td = Number(features?.topic_diversity) || 0.3;
+    const ac = Number(features?.activity_consistency) || 0.7;
+    const lr = Number(features?.learning_ratio) || 0.4;
+    const ln = Number(features?.late_night_ratio) || 0.1;
+
+    const clamp = (min: number, max: number, val: number) => Math.min(max, Math.max(min, val));
+
+    return {
+      openness: Number(clamp(1.0, 5.0, 2.5 + td * 3.0).toFixed(2)),
+      conscientiousness: Number(clamp(1.0, 5.0, 2.0 + ac * 2.5 - ln * 1.5).toFixed(2)),
+      extraversion: Number(clamp(1.0, 5.0, 2.8 + lr * 1.5).toFixed(2)),
+      agreeableness: Number(clamp(1.0, 5.0, 3.2 + (1.0 - ln) * 1.0).toFixed(2)),
+      neuroticism: Number(clamp(1.0, 5.0, 1.8 + ln * 2.5).toFixed(2))
+    };
+  };
+
+  const activeProcessingUsersTs = new Set<string>();
+
+  const runPipelineForUser = async (userId: string, collections: any) => {
+    if (!userId || !collections) return null;
+
+    if (activeProcessingUsersTs.has(userId)) {
+      console.log(`Processing already active for user ${userId}. Skipping duplicate.`);
+      return { status: "skipped", reason: "already_processing" };
+    }
+
+    activeProcessingUsersTs.add(userId);
+    try {
+      const currentEventCount = await collections.raw_events.countDocuments({ user_id: userId });
+      const statusDoc = await collections.processing_status.findOne({ user_id: userId });
+      const profileDoc = await collections.behavior_profiles.findOne({ user_id: userId });
+
+      let lastProcessedCount = 0;
+      if (statusDoc && typeof statusDoc.last_processed_event_count === "number") {
+        lastProcessedCount = statusDoc.last_processed_event_count;
+      } else if (profileDoc && typeof profileDoc.last_processed_event_count === "number") {
+        lastProcessedCount = profileDoc.last_processed_event_count;
+      }
+
+      const delta = currentEventCount - lastProcessedCount;
+      if (delta < PROCESSING_THRESHOLD) {
+        console.log(`Threshold not met for user ${userId}: current=${currentEventCount}, last_processed=${lastProcessedCount}, delta=${delta} < ${PROCESSING_THRESHOLD}`);
+        return {
+          status: "skipped",
+          reason: "threshold_not_met",
+          current_event_count: currentEventCount,
+          last_processed_event_count: lastProcessedCount,
+          delta
+        };
+      }
+
+      const nowIso = new Date().toISOString();
+      await collections.processing_status.updateOne(
+        { user_id: userId },
+        {
+          $set: {
+            user_id: userId,
+            processing_status: "processing",
+            processing_in_progress: true,
+            started_at: nowIso
+          }
+        },
+        { upsert: true }
+      );
+
+      const processRes = await processDataForUser(userId, collections);
+      if (!processRes) {
+        throw new Error("processDataForUser failed or returned null");
+      }
+
+      const features = await collections.user_features.findOne({ user_id: userId }) || {};
+      const oceanScores = calculateOceanScores(features);
+
+      const predictionDoc = {
+        user_id: userId,
+        scores: oceanScores,
+        predicted_at: new Date().toISOString(),
+        event_count_at_prediction: currentEventCount,
+        prediction_version: "v1"
+      };
+
+      await collections.personality_predictions.updateOne(
+        { user_id: userId },
+        { $set: predictionDoc },
+        { upsert: true }
+      );
+
+      await collections.ocean_predictions.updateOne(
+        { user_id: userId },
+        {
+          $set: {
+            user_id: userId,
+            scores: oceanScores,
+            updated_at: new Date().toISOString(),
+            event_count_at_prediction: currentEventCount
+          }
+        },
+        { upsert: true }
+      );
+
+      await collections.behavior_profiles.updateOne(
+        { user_id: userId },
+        {
+          $set: {
+            last_processed_event_count: currentEventCount,
+            last_processed_at: new Date().toISOString(),
+            pipeline_status: "completed",
+            pipeline_version: "v1"
+          }
+        },
+        { upsert: true }
+      );
+
+      await collections.processing_status.updateOne(
+        { user_id: userId },
+        {
+          $set: {
+            user_id: userId,
+            last_processed_event_count: currentEventCount,
+            last_processed_at: new Date().toISOString(),
+            processing_status: "completed",
+            processing_in_progress: false,
+            total_events: currentEventCount
+          }
+        },
+        { upsert: true }
+      );
+
+      if (N8N_WEBHOOK_URL) {
+        fetch(N8N_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: userId,
+            event_count: currentEventCount,
+            last_processed_event_count: currentEventCount,
+            processed: true,
+            timestamp: new Date().toISOString()
+          })
+        }).catch(err => console.warn("Optional n8n notice failed:", err));
+      }
+
+      console.log(`Pipeline completed successfully for user ${userId} at ${currentEventCount} events.`);
+      return { status: "success", user_id: userId, processed_event_count: currentEventCount, ocean_scores: oceanScores };
+    } catch (err: any) {
+      console.error(`Pipeline failed for user ${userId}:`, err);
+      if (collections && collections.processing_status) {
+        await collections.processing_status.updateOne(
+          { user_id: userId },
+          {
+            $set: {
+              user_id: userId,
+              processing_status: "failed",
+              processing_in_progress: false,
+              last_error: String(err),
+              failed_at: new Date().toISOString()
+            }
+          },
+          { upsert: true }
+        ).catch(() => {});
+      }
+      return null;
+    } finally {
+      activeProcessingUsersTs.delete(userId);
+    }
   };
 
   // Processing Endpoint (Phase 4)
@@ -762,23 +882,8 @@ async function startServer() {
       const collections = getCollections();
       if (!collections) return res.status(500).json({ message: "Database unavailable" });
 
-      const result = await processDataForUser(user_id, collections);
+      const result = await runPipelineForUser(user_id, collections);
       if (!result) {
-        return res.status(404).json({ message: "No raw events found or too short to process" });
-      }
-
-      res.json({ 
-        message: "Processing completed", 
-        user_id,
-        summary: result.profile.signals
-      });
-    } catch (error) {
-      console.error("Error processing data:", error);
-      res.status(500).json({ message: "Error processing data" });
-    }
-  });
-
-  // Preprocess endpoints for n8n orchestration forwarding
   const handlePreprocess = async (req: any, res: any) => {
     const { user_id, event_count, events } = req.body;
     

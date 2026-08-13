@@ -24,6 +24,11 @@ def predict_personality(features_dict, model_dir="/ml"):
         "activity_consistency": 0.80
     }
     """
+    if model_dir == "/ml" and not os.path.exists("/ml"):
+        local_ml = os.path.join(os.getcwd(), "ml")
+        if os.path.exists(local_ml):
+            model_dir = local_ml
+
     scaler_path = os.path.join(model_dir, "scaler.pkl")
     keras_model_path = os.path.join(model_dir, "personality_model.keras")
     pkl_model_path = os.path.join(model_dir, "personality_model.pkl")

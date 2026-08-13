@@ -32,3 +32,11 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Audit and diagnostic files
+audit_*.py
+ARCHITECTURE_AUDIT.txt
+AUDIT_COMPLETION_SUMMARY.txt
+FINAL_AUDIT_REPORT.*
+TRIGGER_AUDIT_FINAL_REPORT.txt
+flow_diagram.py

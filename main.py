@@ -49,12 +49,30 @@ if not MONGODB_URI:
     logger.warning("MONGODB_URI not set")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "default_secret_for_dev_only")
-PROCESSING_THRESHOLD = 1
+PROCESSING_THRESHOLD = 100
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 
 # MongoDB Client
 client = AsyncIOMotorClient(MONGODB_URI) if MONGODB_URI else None
 db = client.get_database() if client is not None else None
+
+# Concurrency lock set for user processing
+active_processing_users = set()
+
+def calculate_ocean_scores(features: dict) -> dict:
+    td = safe_float(features.get("topic_diversity"), 0.3)
+    ac = safe_float(features.get("activity_consistency"), 0.7)
+    lr = safe_float(features.get("learning_ratio"), 0.4)
+    ln = safe_float(features.get("late_night_ratio"), 0.1)
+
+    return {
+        "openness": round(min(5.0, max(1.0, 2.5 + td * 3.0)), 2),
+        "conscientiousness": round(min(5.0, max(1.0, 2.0 + ac * 2.5 - ln * 1.5)), 2),
+        "extraversion": round(min(5.0, max(1.0, 2.8 + lr * 1.5)), 2),
+        "agreeableness": round(min(5.0, max(1.0, 3.2 + (1.0 - ln) * 1.0)), 2),
+        "neuroticism": round(min(5.0, max(1.0, 1.8 + ln * 2.5)), 2)
+    }
+
 
 # --- AUTH HELPERS ---
 def hash_password(password: str) -> str:
@@ -565,42 +583,12 @@ async def store_event(event: EventPayload, background_tasks: BackgroundTasks):
         await db.raw_events.insert_one(event_dict)
         logger.info(f"Event stored for user {event.user_id}")
 
-    # Enqueue enrichment pipeline & behavior profile generation in background
+    # Enqueue enrichment pipeline & processing pipeline coordinator in background
     background_tasks.add_task(enrich_event_pipeline, event_dict, db)
-    background_tasks.add_task(process_data_for_user, event.user_id)
-
-    count = await db.raw_events.count_documents({"user_id": event.user_id})
-
-    if count >= PROCESSING_THRESHOLD:
-        status = await db.processing_status.find_one({"user_id": event.user_id})
-        
-        if not status or not status.get("processing_triggered", False):
-            trigger_payload = {
-                "user_id": event.user_id,
-                "event_count": count,
-                "triggered_at": datetime.utcnow().isoformat()
-            }
-
-            await db.processing_status.update_one(
-                {"user_id": event.user_id},
-                {
-                    "$set": {
-                        "processing_triggered": True,
-                        "total_events": count,
-                        "last_triggered_at": trigger_payload["triggered_at"]
-                    }
-                },
-                upsert=True
-            )
-
-            if N8N_WEBHOOK_URL:
-                try:
-                    async with httpx.AsyncClient() as httpx_client:
-                        await httpx_client.post(N8N_WEBHOOK_URL, json=trigger_payload)
-                except Exception as e:
-                    logger.error(f"Error triggering n8n: {e}")
+    background_tasks.add_task(run_pipeline_for_user, event.user_id)
 
     return {"message": "Event stored"}
+
 
 # --- PHASE 4: PROCESSING PIPELINE ---
 def clean_title(title: Any) -> str:
@@ -622,13 +610,41 @@ def get_sentiment_score(title: Any) -> float:
         if w in neg: score -= 1.0
     return score
 
+def calculate_learning_ratio(valid_events: list) -> float:
+    if not valid_events:
+        return 0.0
+    edu_keywords = {"tutorial", "course", "lecture", "how to", "python", "coding", "math", "science", "documentary", "history", "lesson", "guide", "tech", "physics", "chemistry", "biology", "engineering", "education"}
+    learning_count = 0
+    for e in valid_events:
+        title = (e.get("content_title") or e.get("url") or "").lower()
+        if any(kw in title for kw in edu_keywords):
+            learning_count += 1
+    return learning_count / len(valid_events)
+
+def get_ocean_prediction(features: dict) -> dict:
+    model_dir = os.path.join(os.getcwd(), "ml")
+    scaler_path = os.path.join(model_dir, "scaler.pkl")
+    has_model = os.path.exists(scaler_path) and (
+        os.path.exists(os.path.join(model_dir, "personality_model.keras")) or
+        os.path.exists(os.path.join(model_dir, "personality_model.pkl"))
+    )
+
+    if has_model:
+        from ml.predict import predict_personality
+        return predict_personality(features, model_dir=model_dir)
+    else:
+        use_fallback = os.getenv("USE_HEURISTIC_FALLBACK", "true").lower() in ("true", "1", "yes")
+        if not use_fallback:
+            raise FileNotFoundError("ML model files not found and USE_HEURISTIC_FALLBACK is disabled.")
+        return calculate_ocean_scores(features)
+
 async def process_data_for_user(user_id: str) -> Optional[dict]:
     if db is None:
         return None
     
     try:
         cursor = db.raw_events.find({"user_id": user_id})
-        events = await cursor.to_list(length=1000)
+        events = await cursor.to_list(length=None)
         
         if not events:
             return None
@@ -684,6 +700,8 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
         except Exception:
             sent_var = 0.0
 
+        learning_div = calculate_learning_ratio(valid_events)
+
         features = {
             "user_id": user_id,
             "total_events": total_events,
@@ -691,6 +709,7 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
             "total_watch_time": total_time,
             "late_night_ratio": ln_ratio,
             "topic_diversity": topic_div,
+            "learning_ratio": learning_div,
             "repetition_score": repetitive,
             "activity_consistency": consistency,
             "avg_sentiment": avg_sent,
@@ -716,14 +735,180 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
         logger.error(f"[process_data_for_user] Exception for user {user_id}: {err}")
         return None
 
+async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
+    if db is None:
+        return None
+
+    if user_id in active_processing_users:
+        logger.info(f"Processing already active for user {user_id}. Skipping duplicate request.")
+        return {"status": "skipped", "reason": "already_processing"}
+
+    active_processing_users.add(user_id)
+    try:
+        current_event_count = await db.raw_events.count_documents({"user_id": user_id})
+
+        status_doc = await db.processing_status.find_one({"user_id": user_id})
+        last_processed_count = 0
+        if status_doc and "last_processed_event_count" in status_doc:
+            last_processed_count = safe_int(status_doc.get("last_processed_event_count"), 0)
+        else:
+            profile_doc = await db.behavior_profiles.find_one({"user_id": user_id})
+            if profile_doc and "last_processed_event_count" in profile_doc:
+                last_processed_count = safe_int(profile_doc.get("last_processed_event_count"), 0)
+
+        delta = current_event_count - last_processed_count
+        if delta < PROCESSING_THRESHOLD:
+            logger.info(f"Threshold not met for user {user_id}: current={current_event_count}, last_processed={last_processed_count}, delta={delta} < {PROCESSING_THRESHOLD}")
+            return {
+                "status": "skipped",
+                "reason": "threshold_not_met",
+                "current_event_count": current_event_count,
+                "last_processed_event_count": last_processed_count,
+                "delta": delta
+            }
+
+        now_iso = datetime.utcnow().isoformat()
+        await db.processing_status.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "user_id": user_id,
+                    "processing_status": "processing",
+                    "processing_in_progress": True,
+                    "started_at": now_iso
+                }
+            },
+            upsert=True
+        )
+
+        # 1. Feature Engineering & Behavior Profile Generation
+        profile = await process_data_for_user(user_id)
+        if not profile:
+            raise Exception("process_data_for_user returned None or failed")
+
+        features = await db.user_features.find_one({"user_id": user_id}) or {}
+
+        # 2. OCEAN Score Calculation (ML inference if model exists, heuristic fallback if missing)
+        ocean_scores = get_ocean_prediction(features)
+
+        # 3. Persist to personality_predictions via UPSERT (single doc per user)
+        prediction_doc = {
+            "user_id": user_id,
+            "scores": ocean_scores,
+            "predicted_at": datetime.utcnow().isoformat(),
+            "event_count_at_prediction": current_event_count,
+            "prediction_version": "v1"
+        }
+        await db.personality_predictions.update_one(
+            {"user_id": user_id},
+            {"$set": prediction_doc},
+            upsert=True
+        )
+
+        # 4. Persist to ocean_predictions via UPSERT (backwards compatibility)
+        await db.ocean_predictions.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "user_id": user_id,
+                    "scores": ocean_scores,
+                    "updated_at": datetime.utcnow().isoformat(),
+                    "event_count_at_prediction": current_event_count
+                }
+            },
+            upsert=True
+        )
+
+        # 5. Update behavior_profiles metadata
+        await db.behavior_profiles.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "last_processed_event_count": current_event_count,
+                    "last_processed_at": datetime.utcnow().isoformat(),
+                    "pipeline_status": "completed",
+                    "pipeline_version": "v1"
+                }
+            },
+            upsert=True
+        )
+
+        # 6. Update processing_status ONLY AFTER ALL STAGES SUCCEED
+        await db.processing_status.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "user_id": user_id,
+                    "last_processed_event_count": current_event_count,
+                    "last_processed_at": datetime.utcnow().isoformat(),
+                    "processing_status": "completed",
+                    "processing_in_progress": False,
+                    "total_events": current_event_count
+                }
+            },
+            upsert=True
+        )
+
+        # 7. Optional n8n notification hook (fire and forget, fail-safe)
+        if N8N_WEBHOOK_URL:
+            try:
+                async with httpx.AsyncClient() as httpx_client:
+                    await httpx_client.post(
+                        N8N_WEBHOOK_URL,
+                        json={
+                            "user_id": user_id,
+                            "event_count": current_event_count,
+                            "last_processed_event_count": current_event_count,
+                            "processed": True,
+                            "timestamp": datetime.utcnow().isoformat()
+                        },
+                        timeout=5.0
+                    )
+            except Exception as n8n_err:
+                logger.warning(f"Optional n8n webhook notice failed: {n8n_err}")
+
+        logger.info(f"[run_pipeline_for_user] Success for user {user_id} at {current_event_count} events.")
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "processed_event_count": current_event_count,
+            "ocean_scores": ocean_scores
+        }
+    except Exception as pipeline_err:
+        logger.error(f"[run_pipeline_for_user] Exception for user {user_id}: {pipeline_err}")
+        if db is not None:
+            try:
+                await db.processing_status.update_one(
+                    {"user_id": user_id},
+                    {
+                        "$set": {
+                            "user_id": user_id,
+                            "processing_status": "failed",
+                            "processing_in_progress": False,
+                            "last_error": str(pipeline_err),
+                            "failed_at": datetime.utcnow().isoformat()
+                        }
+                    },
+                    upsert=True
+                )
+            except Exception as status_err:
+                logger.error(f"Error recording failure status in db: {status_err}")
+        return None
+    finally:
+        active_processing_users.discard(user_id)
+
 @app.post("/process-data")
 async def process_data(req: ProcessRequest):
     if db is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
-    profile = await process_data_for_user(req.user_id)
-    if not profile:
-        raise HTTPException(status_code=404, detail="No events found or failed to process")
-    return {"message": "Processing completed", "user_id": req.user_id, "summary": profile["signals"]}
+    result = await run_pipeline_for_user(req.user_id)
+    if not result:
+        profile = await process_data_for_user(req.user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="No events found or failed to process")
+        return {"message": "Processing completed (fallback)", "user_id": req.user_id, "summary": profile["signals"]}
+    return {"message": "Processing completed", "user_id": req.user_id, "result": result}
+
 
 @app.post("/preprocess")
 @app.post("/api/preprocess")
@@ -974,21 +1159,21 @@ async def ocean_model(payload: Optional[PipelineStageRequest] = Body(None)):
                 logger.error(f"Error reading features: {e}")
 
         features = features or {}
-        td = features.get("topic_diversity", 0.3)
-        ac = features.get("activity_consistency", 0.7)
-        lr = features.get("learning_ratio", 0.4)
-        ln = features.get("late_night_ratio", 0.1)
-
-        ocean_scores = {
-            "openness": round(min(5.0, max(1.0, 2.5 + td * 3.0)), 2),
-            "conscientiousness": round(min(5.0, max(1.0, 2.0 + ac * 2.5 - ln * 1.5)), 2),
-            "extraversion": round(min(5.0, max(1.0, 2.8 + lr * 1.5)), 2),
-            "agreeableness": round(min(5.0, max(1.0, 3.2 + (1.0 - ln) * 1.0)), 2),
-            "neuroticism": round(min(5.0, max(1.0, 1.8 + ln * 2.5)), 2)
-        }
+        ocean_scores = calculate_ocean_scores(features)
 
         if db is not None:
             try:
+                prediction_doc = {
+                    "user_id": user_id,
+                    "scores": ocean_scores,
+                    "predicted_at": datetime.utcnow().isoformat(),
+                    "prediction_version": "v1"
+                }
+                await db.personality_predictions.update_one(
+                    {"user_id": user_id},
+                    {"$set": prediction_doc},
+                    upsert=True
+                )
                 await db.ocean_predictions.update_one(
                     {"user_id": user_id},
                     {"$set": {"user_id": user_id, "scores": ocean_scores, "updated_at": datetime.utcnow().isoformat()}},
@@ -996,6 +1181,7 @@ async def ocean_model(payload: Optional[PipelineStageRequest] = Body(None)):
                 )
             except Exception as e:
                 logger.error(f"Error saving OCEAN predictions: {e}")
+
 
         return {
             "status": "success",
