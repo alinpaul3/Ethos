@@ -40,18 +40,23 @@ except ImportError:
     print("[WARNING] TensorFlow is not installed. Will utilize Scikit-Learn MultiOutput MLP fallback.")
 
 
-def train_pipeline(csv_path: str = "training_dataset.csv", output_dir: str = "/ml"):
+def train_pipeline(csv_path: str = "training_dataset.csv", output_dir: str = "ml"):
     """
     Executes complete end-to-end ML model training pipeline.
     """
+    if output_dir == "/ml" or not os.path.isabs(output_dir):
+        output_dir = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(output_dir, exist_ok=True)
     print("=" * 65)
     print("      STARTING BFI-44 OCEAN PERSONALITY MODEL TRAINING PIPELINE")
     print("=" * 65)
 
     # Resolve CSV Path
-    if not os.path.exists(csv_path) and os.path.exists(os.path.join("..", csv_path)):
-        csv_path = os.path.join("..", csv_path)
+    if not os.path.exists(csv_path):
+        if os.path.exists(os.path.join(os.path.dirname(output_dir), csv_path)):
+            csv_path = os.path.join(os.path.dirname(output_dir), csv_path)
+        elif os.path.exists(os.path.join("..", csv_path)):
+            csv_path = os.path.join("..", csv_path)
 
     # 1. Load Data & Prepare X, Y
     df, X, Y, feature_names, target_names = load_and_prepare_data(csv_path)

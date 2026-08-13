@@ -10,9 +10,17 @@ import json
 import joblib
 import numpy as np
 
+FEATURE_NAMES = [
+    "avg_session_duration",
+    "late_night_ratio",
+    "topic_diversity",
+    "learning_ratio",
+    "activity_consistency"
+]
+
 TARGET_NAMES = ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"]
 
-def predict_personality(features_dict, model_dir="/ml"):
+def predict_personality(features_dict, model_dir="ml"):
     """
     Predicts OCEAN personality traits given behavioral feature input dict.
     Example input:
@@ -24,10 +32,10 @@ def predict_personality(features_dict, model_dir="/ml"):
         "activity_consistency": 0.80
     }
     """
-    if model_dir == "/ml" and not os.path.exists("/ml"):
-        local_ml = os.path.join(os.getcwd(), "ml")
-        if os.path.exists(local_ml):
-            model_dir = local_ml
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if model_dir == "/ml" or not os.path.exists(model_dir):
+        if os.path.exists(script_dir):
+            model_dir = script_dir
 
     scaler_path = os.path.join(model_dir, "scaler.pkl")
     keras_model_path = os.path.join(model_dir, "personality_model.keras")
@@ -53,20 +61,31 @@ def predict_personality(features_dict, model_dir="/ml"):
     if os.path.exists(keras_model_path):
         import tensorflow as tf
         model = tf.keras.models.load_model(keras_model_path)
-        predictions = model.predict(X_scaled)[0]
+        raw_pred = model.predict(X_scaled)
+        predictions = raw_pred[0] if len(raw_pred.shape) > 1 else raw_pred
     elif os.path.exists(pkl_model_path):
         model = joblib.load(pkl_model_path)
-        predictions = model.predict(X_scaled)[0]
+        raw_pred = model.predict(X_scaled)
+        predictions = raw_pred[0] if len(raw_pred.shape) > 1 else raw_pred
     else:
         raise FileNotFoundError(f"No trained model found at {keras_model_path} or {pkl_model_path}.")
 
     # Clip predictions to standard BFI-44 range [1.0, 5.0]
-    result = {}
+    scores = {}
     for name, raw_val in zip(TARGET_NAMES, predictions):
         score = float(np.round(np.clip(raw_val, 1.0, 5.0), 2))
-        result[name] = score
+        scores[name] = score
 
-    return result
+    return {
+        "status": "success",
+        "prediction_method": "ml",
+        "scores": scores,
+        "openness": scores["openness"],
+        "conscientiousness": scores["conscientiousness"],
+        "extraversion": scores["extraversion"],
+        "agreeableness": scores["agreeableness"],
+        "neuroticism": scores["neuroticism"]
+    }
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:

@@ -650,9 +650,49 @@ async function startServer() {
     
     const lateNightRatio = calculateLateNightRatio(eventsToUse);
     const activityConsistency = calculateActivityConsistency(eventsToUse);
-    const topicDiversity = calculateTopicDiversity(eventsToUse);
-    const learningRatio = calculateLearningRatio(eventsToUse);
     const repetitionScore = calculateRepetitionScore(eventsToUse);
+
+    // Fetch completed enriched_events for Gemini semantic signals
+    const enrichedList = await collections.enriched_events.find({ user_id }).toArray();
+    const completedEnrichments = enrichedList.filter(
+      (ee: any) => ee.enrichment_status === "completed" && ee.gemini_analysis
+    );
+
+    let topicDiversity = 0;
+    let learningRatio = 0;
+
+    if (completedEnrichments.length > 0) {
+      const geminiTags: string[] = [];
+      let learningCount = 0;
+
+      for (const ee of completedEnrichments) {
+        const ga = ee.gemini_analysis || {};
+        if (Array.isArray(ga.topic_tags)) {
+          ga.topic_tags.forEach((t: string) => {
+            if (t) geminiTags.push(String(t).toLowerCase());
+          });
+        }
+        const cat = String(ga.content_category || "").toLowerCase();
+        const intent = String(ga.estimated_user_intent || "").toLowerCase();
+        const domain = String(ga.knowledge_domain || "").toLowerCase();
+
+        if (
+          ["educational", "tech/gaming", "news/documentary"].includes(cat) ||
+          ["learning", "skill_acquisition", "information_seeking", "curiosity"].includes(intent) ||
+          ["science", "tech", "computer", "math", "education", "engineering"].some(k => domain.includes(k))
+        ) {
+          learningCount++;
+        }
+      }
+
+      const uniqueTags = new Set(geminiTags);
+      topicDiversity = Math.min(1.0, uniqueTags.size / (completedEnrichments.length + 1));
+      learningRatio = Math.min(1.0, learningCount / completedEnrichments.length);
+    } else {
+      // Fallback text calculations when no completed Gemini enrichments exist yet
+      topicDiversity = calculateTopicDiversity(eventsToUse);
+      learningRatio = calculateLearningRatio(eventsToUse);
+    }
     
     const sentimentScores = eventsToUse.map((e: any) => getSentimentScore(e.content_title || e.url || ""));
     const avgSentiment = sentimentScores.length > 0 ? (sentimentScores.reduce((a: number, b: number) => a + b, 0) / sentimentScores.length) : 0;
@@ -662,14 +702,14 @@ async function startServer() {
     const userFeatures = {
       user_id,
       total_events: totalEvents,
-      avg_session_duration: avgSessionDuration,
+      avg_session_duration: Number(avgSessionDuration.toFixed(2)),
       total_watch_time: totalWatchTime,
-      late_night_ratio: lateNightRatio,
-      topic_diversity: topicDiversity,
-      learning_ratio: learningRatio,
-      repetition_score: repetitionScore,
-      activity_consistency: activityConsistency,
-      avg_sentiment: avgSentiment,
+      late_night_ratio: Number(lateNightRatio.toFixed(3)),
+      topic_diversity: Number(topicDiversity.toFixed(3)),
+      learning_ratio: Number(learningRatio.toFixed(3)),
+      repetition_score: Number(repetitionScore.toFixed(3)),
+      activity_consistency: Number(activityConsistency.toFixed(3)),
+      avg_sentiment: Number(avgSentiment.toFixed(3)),
       processed_at: new Date().toISOString()
     };
 
@@ -699,6 +739,39 @@ async function startServer() {
     );
     console.log(`Processing completed for user: ${user_id}. Signals generated.`);
     return { features: userFeatures, profile: behaviorProfile };
+  };
+
+  const predictPersonalityMl = async (features: any): Promise<any> => {
+    const { exec } = await import("child_process");
+    const predictScript = path.join(process.cwd(), "ml", "predict.py");
+    const pythonCmd = process.platform === "win32" ? "python" : "python3";
+
+    const featurePayload = {
+      avg_session_duration: Number(features?.avg_session_duration) || 0,
+      late_night_ratio: Number(features?.late_night_ratio) || 0,
+      topic_diversity: Number(features?.topic_diversity) || 0,
+      learning_ratio: Number(features?.learning_ratio) || 0,
+      activity_consistency: Number(features?.activity_consistency) || 0
+    };
+
+    const jsonArg = JSON.stringify(featurePayload).replace(/"/g, '\\"');
+
+    return new Promise((resolve, reject) => {
+      exec(`${pythonCmd} "${predictScript}" "${jsonArg}"`, (err, stdout, stderr) => {
+        if (err) {
+          return reject(new Error(`ML prediction exec failed: ${stderr || err.message}`));
+        }
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          if (parsed && (parsed.prediction_method === "ml" || parsed.scores)) {
+            return resolve(parsed);
+          }
+          return reject(new Error(`Invalid ML prediction output: ${stdout}`));
+        } catch (parseErr: any) {
+          return reject(new Error(`Failed to parse ML output JSON: ${parseErr.message}`));
+        }
+      });
+    });
   };
 
   const calculateOceanScores = (features: any) => {
@@ -773,14 +846,33 @@ async function startServer() {
       }
 
       const features = await collections.user_features.findOne({ user_id: userId }) || {};
-      const oceanScores = calculateOceanScores(features);
+      
+      // Execute ML inference in production (no silent fallback to heuristics)
+      let oceanScores: any;
+      let predictionMethod = "ml";
+
+      try {
+        const mlRes = await predictPersonalityMl(features);
+        oceanScores = mlRes.scores || mlRes;
+        predictionMethod = mlRes.prediction_method || "ml";
+      } catch (mlErr: any) {
+        const useFallback = (process.env.USE_HEURISTIC_FALLBACK || "false").toLowerCase() === "true";
+        if (!useFallback) {
+          throw new Error(`ML model inference failed and USE_HEURISTIC_FALLBACK is disabled: ${mlErr.message}`);
+        }
+        console.warn("[OCEAN Model] ML model inference failed. Using explicitly enabled heuristic fallback:", mlErr.message);
+        oceanScores = calculateOceanScores(features);
+        predictionMethod = "heuristic";
+      }
 
       const predictionDoc = {
         user_id: userId,
         scores: oceanScores,
-        predicted_at: new Date().toISOString(),
+        prediction_method: predictionMethod,
+        feature_version: "v1",
+        prediction_version: "v1",
         event_count_at_prediction: currentEventCount,
-        prediction_version: "v1"
+        predicted_at: new Date().toISOString()
       };
 
       await collections.personality_predictions.updateOne(
@@ -795,6 +887,7 @@ async function startServer() {
           $set: {
             user_id: userId,
             scores: oceanScores,
+            prediction_method: predictionMethod,
             updated_at: new Date().toISOString(),
             event_count_at_prediction: currentEventCount
           }
@@ -1312,11 +1405,8 @@ async function startServer() {
   const handleTrainMlModel = async (req: any, res: any) => {
     try {
       const { exec } = await import("child_process");
-      const mlScript = path.join(process.cwd(), "ml", "train_personality_model.py");
-      
-      console.log(`[ML Pipeline] Executing training script: ${mlScript}`);
-
-      exec(`python3 ${mlScript} /ml training_dataset.csv`, async (err, stdout, stderr) => {
+      const pythonCmd = process.platform === "win32" ? "python" : "python3";
+      exec(`${pythonCmd} "${mlScript}" ml training_dataset.csv`, async (err, stdout, stderr) => {
         if (err) {
           console.error("[ML Pipeline] Python training error:", stderr || err.message);
           return res.status(500).json({
@@ -1402,11 +1492,8 @@ async function startServer() {
         return res.status(400).json({ status: "failed", error: "Missing feature vector or valid user_id" });
       }
 
-      const { exec } = await import("child_process");
-      const predictScript = path.join(process.cwd(), "ml", "predict.py");
-      const jsonArg = JSON.stringify(featurePayload).replace(/"/g, '\\"');
-
-      exec(`python3 ${predictScript} "${jsonArg}"`, (err, stdout, stderr) => {
+      const pythonCmd = process.platform === "win32" ? "python" : "python3";
+      exec(`${pythonCmd} "${predictScript}" "${jsonArg}"`, (err, stdout, stderr) => {
         if (err) {
           return res.status(500).json({ status: "failed", error: stderr || err.message });
         }

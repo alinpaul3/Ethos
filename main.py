@@ -3,7 +3,7 @@ import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 from pydantic import BaseModel, HttpUrl, EmailStr
-from enrichment_service import enrich_event_pipeline
+from enrichment_service import enrich_event_pipeline, generate_event_id
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timedelta, date
 import os
@@ -58,6 +58,26 @@ db = client.get_database() if client is not None else None
 
 # Concurrency lock set for user processing
 active_processing_users = set()
+
+@app.on_event("startup")
+async def startup_db_indexes():
+    if db is not None:
+        try:
+            pipeline = [
+                {"$group": {"_id": "$event_id", "count": {"$sum": 1}, "docs": {"$push": "$_id"}}},
+                {"$match": {"count": {"$gt": 1}}}
+            ]
+            dupes = await db.enriched_events.aggregate(pipeline).to_list(100)
+            if dupes:
+                logger.warning(f"[DB Startup] Found {len(dupes)} duplicate event_id groups in enriched_events. Preserving newest entries.")
+                for d in dupes:
+                    doc_ids = d.get("docs", [])
+                    if len(doc_ids) > 1:
+                        await db.enriched_events.delete_many({"_id": {"$in": doc_ids[1:]}})
+            await db.enriched_events.create_index([("event_id", 1)], unique=True, sparse=True)
+            logger.info("[DB Startup] Verified unique sparse index on enriched_events.event_id")
+        except Exception as e:
+            logger.warning(f"[DB Startup] Index verification notice: {e}")
 
 def calculate_ocean_scores(features: dict) -> dict:
     td = safe_float(features.get("topic_diversity"), 0.3)
@@ -199,6 +219,10 @@ class EventPayload(BaseModel):
     timestamp_start: str
     timestamp_end: str
     duration_seconds: float
+
+class EnrichBatchRequest(BaseModel):
+    user_id: Optional[str] = None
+    limit: Optional[int] = 200
 
 class ProcessRequest(BaseModel):
     user_id: str
@@ -629,14 +653,39 @@ def get_ocean_prediction(features: dict) -> dict:
         os.path.exists(os.path.join(model_dir, "personality_model.pkl"))
     )
 
+    if not has_model:
+        try:
+            sys.path.insert(0, model_dir)
+            from build_model_artifacts import build_and_save_artifacts
+            logger.info("[OCEAN Model] Model artifacts missing. Auto-bootstrapping baseline supervised model artifacts in ./ml/...")
+            build_and_save_artifacts()
+            has_model = os.path.exists(scaler_path) and (
+                os.path.exists(os.path.join(model_dir, "personality_model.keras")) or
+                os.path.exists(os.path.join(model_dir, "personality_model.pkl"))
+            )
+        except Exception as bootstrap_err:
+            logger.error(f"[OCEAN Model] Failed to auto-bootstrap ML model artifacts: {bootstrap_err}")
+
     if has_model:
         from ml.predict import predict_personality
-        return predict_personality(features, model_dir=model_dir)
+        res = predict_personality(features, model_dir=model_dir)
+        res["prediction_method"] = "ml"
+        return res
     else:
-        use_fallback = os.getenv("USE_HEURISTIC_FALLBACK", "true").lower() in ("true", "1", "yes")
+        use_fallback = os.getenv("USE_HEURISTIC_FALLBACK", "false").lower() in ("true", "1", "yes")
         if not use_fallback:
-            raise FileNotFoundError("ML model files not found and USE_HEURISTIC_FALLBACK is disabled.")
-        return calculate_ocean_scores(features)
+            raise FileNotFoundError("ML model files (scaler.pkl, personality_model.keras/pkl) not found in ./ml/ and USE_HEURISTIC_FALLBACK is disabled.")
+        logger.warning("[OCEAN Model] Model files missing in ./ml/. Utilizing explicitly enabled heuristic fallback.")
+        scores = calculate_ocean_scores(features)
+        return {
+            "prediction_method": "heuristic",
+            "scores": scores,
+            "openness": scores.get("openness", 3.0),
+            "conscientiousness": scores.get("conscientiousness", 3.0),
+            "extraversion": scores.get("extraversion", 3.0),
+            "agreeableness": scores.get("agreeableness", 3.0),
+            "neuroticism": scores.get("neuroticism", 3.0)
+        }
 
 async def process_data_for_user(user_id: str) -> Optional[dict]:
     if db is None:
@@ -684,12 +733,47 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
             consistency = 1.0
         consistency = max(0.0, min(1.0, consistency))
 
+        # Fetch enriched_events to extract Gemini semantic signals
+        enriched_list = await db.enriched_events.find({"user_id": user_id}).to_list(None)
+        completed_enrichments = [
+            ee for ee in enriched_list 
+            if ee.get("enrichment_status") == "completed" and isinstance(ee.get("gemini_analysis"), dict)
+        ]
+        
+        total_completed = len(completed_enrichments)
+        
+        if total_completed > 0:
+            # Semantic topic diversity using Gemini topic_tags
+            gemini_tags = []
+            learning_count = 0
+            for ee in completed_enrichments:
+                ga = ee.get("gemini_analysis", {})
+                tags = ga.get("topic_tags", [])
+                if isinstance(tags, list):
+                    gemini_tags.extend([str(t).lower() for t in tags if t])
+                
+                cat = str(ga.get("content_category", "")).lower()
+                intent = str(ga.get("estimated_user_intent", "")).lower()
+                domain = str(ga.get("knowledge_domain", "")).lower()
+                
+                if cat in ["educational", "tech/gaming", "news/documentary"] or \
+                   intent in ["learning", "skill_acquisition", "information_seeking", "curiosity"] or \
+                   any(k in domain for k in ["science", "tech", "computer", "math", "education", "engineering"]):
+                    learning_count += 1
+            
+            unique_tags = set(gemini_tags)
+            topic_div = len(unique_tags) / (total_completed + 1)
+            learning_div = learning_count / total_completed
+        else:
+            # Fallback text analysis when no completed Gemini enrichments exist yet
+            all_titles = [clean_title(e.get("content_title") or e.get("url") or "") for e in valid_events]
+            all_titles = [t for t in all_titles if t]
+            meaningful_words = {w for t in all_titles for w in t.split() if len(w) > 3}
+            topic_div = len(meaningful_words) / (total_events + 1) if total_events else 0.0
+            learning_div = calculate_learning_ratio(valid_events)
+
         all_titles = [clean_title(e.get("content_title") or e.get("url") or "") for e in valid_events]
         all_titles = [t for t in all_titles if t]
-
-        meaningful_words = {w for t in all_titles for w in t.split() if len(w) > 3}
-        topic_div = len(meaningful_words) / (total_events + 1) if total_events else 0.0
-
         unique_titles = set(all_titles)
         repetitive = (sum(1 for t, c in {t: all_titles.count(t) for t in unique_titles}.items() if c > 1) / len(unique_titles)) if unique_titles else 0.0
 
@@ -700,19 +784,17 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
         except Exception:
             sent_var = 0.0
 
-        learning_div = calculate_learning_ratio(valid_events)
-
         features = {
             "user_id": user_id,
             "total_events": total_events,
             "avg_session_duration": total_time / total_events if total_events else 0.0,
             "total_watch_time": total_time,
             "late_night_ratio": ln_ratio,
-            "topic_diversity": topic_div,
-            "learning_ratio": learning_div,
-            "repetition_score": repetitive,
-            "activity_consistency": consistency,
-            "avg_sentiment": avg_sent,
+            "topic_diversity": round(min(1.0, topic_div), 3),
+            "learning_ratio": round(min(1.0, learning_div), 3),
+            "repetition_score": round(repetitive, 3),
+            "activity_consistency": round(consistency, 3),
+            "avg_sentiment": round(avg_sent, 3),
             "processed_at": datetime.utcnow().isoformat()
         }
 
@@ -788,16 +870,20 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
 
         features = await db.user_features.find_one({"user_id": user_id}) or {}
 
-        # 2. OCEAN Score Calculation (ML inference if model exists, heuristic fallback if missing)
-        ocean_scores = get_ocean_prediction(features)
+        # 2. OCEAN Score Calculation (ML inference if model exists, heuristic fallback if enabled)
+        prediction_result = get_ocean_prediction(features)
+        prediction_method = prediction_result.get("prediction_method", "ml")
+        ocean_scores = prediction_result.get("scores", prediction_result)
 
         # 3. Persist to personality_predictions via UPSERT (single doc per user)
         prediction_doc = {
             "user_id": user_id,
             "scores": ocean_scores,
-            "predicted_at": datetime.utcnow().isoformat(),
+            "prediction_method": prediction_method,
+            "feature_version": "v1",
+            "prediction_version": "v1",
             "event_count_at_prediction": current_event_count,
-            "prediction_version": "v1"
+            "predicted_at": datetime.utcnow().isoformat()
         }
         await db.personality_predictions.update_one(
             {"user_id": user_id},
@@ -812,6 +898,7 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
                 "$set": {
                     "user_id": user_id,
                     "scores": ocean_scores,
+                    "prediction_method": prediction_method,
                     "updated_at": datetime.utcnow().isoformat(),
                     "event_count_at_prediction": current_event_count
                 }
@@ -896,6 +983,66 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
         return None
     finally:
         active_processing_users.discard(user_id)
+
+@app.post("/api/enrich-batch")
+async def enrich_batch(req: Optional[EnrichBatchRequest] = Body(None)):
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    
+    user_id = req.user_id if req else None
+    limit = req.limit if req and req.limit else 200
+
+    query = {"user_id": user_id} if user_id else {}
+    raw_events = await db.raw_events.find(query).to_list(limit)
+
+    total_events = len(raw_events)
+    cached = 0
+    gemini_requests = 0
+    successful = 0
+    quota_exhausted = 0
+    failed = 0
+    quota_stopped = False
+
+    for ev in raw_events:
+        event_id = generate_event_id(ev)
+        
+        # Check cache
+        existing = await db.enriched_events.find_one({"event_id": event_id})
+        if existing and existing.get("enrichment_status") == "completed" and existing.get("processing_status", {}).get("gemini_processed"):
+            cached += 1
+            continue
+
+        if quota_stopped:
+            quota_exhausted += 1
+            continue
+
+        gemini_requests += 1
+        try:
+            enriched_res = await enrich_event_pipeline(ev, db=db)
+            if enriched_res.get("enrichment_status") == "completed":
+                successful += 1
+            elif enriched_res.get("enrichment_status") == "quota_exhausted":
+                quota_exhausted += 1
+                quota_stopped = True
+            else:
+                failed += 1
+        except Exception as err:
+            logger.error(f"[Enrich Batch] Error processing event_id={event_id}: {err}")
+            failed += 1
+
+    remaining = total_events - (cached + successful)
+    return {
+        "status": "success",
+        "telemetry": {
+            "total_events": total_events,
+            "cached": cached,
+            "gemini_requests": gemini_requests,
+            "successful": successful,
+            "quota_exhausted": quota_exhausted,
+            "failed": failed,
+            "remaining": remaining
+        }
+    }
 
 @app.post("/process-data")
 async def process_data(req: ProcessRequest):

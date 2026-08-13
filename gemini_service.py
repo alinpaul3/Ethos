@@ -16,7 +16,17 @@ def get_gemini_client():
         print(f"Failed to initialize Gemini Client: {e}")
         return None
 
-async def analyze_video_metadata(metadata: dict) -> dict:
+class GeminiQuotaExhaustedError(Exception):
+    """Raised when Gemini API quota is exhausted (429 / RESOURCE_EXHAUSTED)."""
+    pass
+
+def is_quota_error(err: Exception) -> bool:
+    err_str = str(err).lower()
+    return any(keyword in err_str for keyword in [
+        "429", "resource_exhausted", "quota", "rate limit", "rate_limit", "exceeded"
+    ])
+
+async def analyze_video_metadata(metadata: dict, raise_on_quota: bool = True) -> dict:
     client = get_gemini_client()
     if not client:
         return get_fallback_analysis(metadata)
@@ -53,8 +63,8 @@ You must return a valid, minified JSON object with the following fields and cons
 
 Your response must contain ONLY the valid JSON object. No markdown formatting, no code blocks (do not wrap in ```json), no additional text.
 """
-    # Valid candidate models in order of preference according to AI Studio guidelines
     candidate_models = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite']
+    last_quota_error = None
 
     for model_name in candidate_models:
         for attempt in range(2):
@@ -68,7 +78,6 @@ Your response must contain ONLY the valid JSON object. No markdown formatting, n
                 )
                 text = response.text.strip()
                 
-                # Clean up any potential markdown wrapper just in case
                 if text.startswith("```"):
                     lines = text.split("\n")
                     if lines[0].startswith("```"):
@@ -79,13 +88,23 @@ Your response must contain ONLY the valid JSON object. No markdown formatting, n
                     
                 parsed = json.loads(text)
                 if isinstance(parsed, dict) and "video_summary" in parsed:
+                    print(f"[ENRICHMENT] Gemini request success: video_id={video_id}")
                     return parsed
             except Exception as e:
-                print(f"Gemini API call ({model_name}, attempt {attempt+1}) failed: {e}")
-                if attempt < 1:
-                    await asyncio.sleep(1)
+                print(f"[ENRICHMENT] Gemini API call ({model_name}, attempt {attempt+1}) failed: {e}")
+                if is_quota_error(e):
+                    last_quota_error = e
+                    backoff_delay = 2.0 * (attempt + 1)
+                    print(f"[ENRICHMENT] Gemini quota exhausted detection ({model_name}): backing off for {backoff_delay}s...")
+                    await asyncio.sleep(backoff_delay)
+                else:
+                    if attempt < 1:
+                        await asyncio.sleep(1.0)
 
-    print("All Gemini models failed or busy. Using smart fallback analysis.")
+    if last_quota_error or raise_on_quota:
+        print(f"[ENRICHMENT] Gemini quota exhausted: video_id={video_id}")
+        raise GeminiQuotaExhaustedError(f"Gemini API 429 Quota Exhausted for video {video_id}: {last_quota_error or 'All model attempts failed'}")
+
     return get_fallback_analysis(metadata)
 
 def get_fallback_analysis(metadata: dict = None) -> dict:

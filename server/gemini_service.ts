@@ -33,6 +33,18 @@ export interface GeminiAnalysis {
   confidence_score: number;
 }
 
+export class GeminiQuotaExhaustedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GeminiQuotaExhaustedError";
+  }
+}
+
+function isQuotaError(err: any): boolean {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return ["429", "resource_exhausted", "quota", "rate limit", "rate_limit", "exceeded"].some(k => msg.includes(k));
+}
+
 export async function analyzeVideoMetadata(metadata: any): Promise<GeminiAnalysis> {
   const client = getGeminiClient();
   if (!client) {
@@ -113,11 +125,11 @@ Your response must contain ONLY the valid JSON object. No markdown formatting, n
 
     return JSON.parse(text) as GeminiAnalysis;
   } catch (err: any) {
-    console.warn(
-      `Gemini API key is invalid or not active yet. Falling back to local/simulated analysis. ` +
-      `Ensure you have provided a valid GEMINI_API_KEY in the Settings > Secrets panel of your AI Studio workspace. ` +
-      `Error details: ${err.message || err}`
-    );
+    if (isQuotaError(err)) {
+      console.warn(`[ENRICHMENT] Gemini API 429 Quota Exhausted in server: ${err.message || err}`);
+      throw new GeminiQuotaExhaustedError(`Gemini API 429 Quota Exhausted: ${err.message || err}`);
+    }
+    console.warn(`Gemini API call failed. Falling back to local analysis. Details: ${err.message || err}`);
     return getFallbackAnalysis();
   }
 }
