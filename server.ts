@@ -869,21 +869,6 @@ async function startServer() {
     }
   };
 
-  // Processing Endpoint (Phase 4)
-  app.post("/process-data", checkDb, async (req, res) => {
-    try {
-      const { user_id, events } = req.body;
-      if (!user_id) return res.status(400).json({ message: "user_id is required" });
-
-      if (events && Array.isArray(events)) {
-        return handlePreprocess(req, res);
-      }
-
-      const collections = getCollections();
-      if (!collections) return res.status(500).json({ message: "Database unavailable" });
-
-      const result = await runPipelineForUser(user_id, collections);
-      if (!result) {
   const handlePreprocess = async (req: any, res: any) => {
     const { user_id, event_count, events } = req.body;
     
@@ -950,6 +935,33 @@ async function startServer() {
 
   app.post("/preprocess", checkDb, handlePreprocess);
   app.post("/api/preprocess", checkDb, handlePreprocess);
+
+  // Processing Endpoint (Phase 4)
+  app.post("/process-data", checkDb, async (req, res) => {
+    try {
+      const { user_id, events } = req.body;
+      if (!user_id) return res.status(400).json({ message: "user_id is required" });
+
+      if (events && Array.isArray(events)) {
+        return handlePreprocess(req, res);
+      }
+
+      const collections = getCollections();
+      if (!collections) return res.status(500).json({ message: "Database unavailable" });
+
+      const result = await runPipelineForUser(user_id, collections);
+      if (!result) {
+        const profile = await processDataForUser(user_id, collections);
+        if (!profile) {
+          return res.status(404).json({ message: "No events found or failed to process" });
+        }
+        return res.json({ message: "Processing completed (fallback)", user_id, summary: profile.signals });
+      }
+      return res.json({ message: "Processing completed", user_id, result });
+    } catch (error: any) {
+      return res.status(500).json({ message: "Processing failed", error: error.message });
+    }
+  });
 
   // BFI-44 Questionnaire Submission & Fetch Endpoints
   const handleQuestionnaireSubmit = async (req: any, res: any) => {
