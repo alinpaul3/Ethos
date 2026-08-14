@@ -64,16 +64,30 @@ async def startup_db_indexes():
     if db is not None:
         try:
             pipeline = [
-                {"$group": {"_id": "$event_id", "count": {"$sum": 1}, "docs": {"$push": "$_id"}}},
-                {"$match": {"count": {"$gt": 1}}}
+                {
+                    "$match": {
+                        "event_id": {
+                            "$exists": True,
+                            "$nin": [None, ""]
+                        }
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": "$event_id",
+                        "count": {"$sum": 1},
+                        "docs": {"$push": "$_id"}
+                    }
+                },
+                {
+                    "$match": {
+                        "count": {"$gt": 1}
+                    }
+                }
             ]
             dupes = await db.enriched_events.aggregate(pipeline).to_list(100)
             if dupes:
-                logger.warning(f"[DB Startup] Found {len(dupes)} duplicate event_id groups in enriched_events. Preserving newest entries.")
-                for d in dupes:
-                    doc_ids = d.get("docs", [])
-                    if len(doc_ids) > 1:
-                        await db.enriched_events.delete_many({"_id": {"$in": doc_ids[1:]}})
+                logger.warning(f"[DB Startup] Found {len(dupes)} duplicate valid event_id groups in enriched_events. Reporting without automated deletion.")
             await db.enriched_events.create_index([("event_id", 1)], unique=True, sparse=True)
             logger.info("[DB Startup] Verified unique sparse index on enriched_events.event_id")
         except Exception as e:
@@ -305,7 +319,7 @@ def calculate_bfi44_scores(responses: List[dict]) -> dict:
     ]
     agreeableness_items = [
         get_score(2, True), get_score(7, False), get_score(12, True), get_score(17, False),
-        get_score(22, False), get_score(27, True), get_score(32, False), get_score(37, True)
+        get_score(22, False), get_score(27, True), get_score(32, False), get_score(37, True), get_score(42, False)
     ]
     conscientiousness_items = [
         get_score(3, False), get_score(8, True), get_score(13, False), get_score(18, True),

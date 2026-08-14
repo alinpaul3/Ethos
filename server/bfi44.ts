@@ -88,7 +88,7 @@ export function calculateBfi44Scores(responses: BfiResponseItem[]) {
 
   const agreeablenessItems = [
     getScore(2, true), getScore(7, false), getScore(12, true), getScore(17, false),
-    getScore(22, false), getScore(27, true), getScore(32, false), getScore(37, true)
+    getScore(22, false), getScore(27, true), getScore(32, false), getScore(37, true), getScore(42, false)
   ];
 
   const conscientiousnessItems = [
