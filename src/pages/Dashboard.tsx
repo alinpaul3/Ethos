@@ -196,6 +196,37 @@ export function Dashboard({ user }: DashboardProps) {
     return `${mins}m ${secs}s`;
   };
 
+  const formatEventTimestamp = (timestampStart?: string, createdAt?: string) => {
+    const rawTime = timestampStart || createdAt;
+    if (!rawTime) return "N/A";
+    try {
+      let iso = String(rawTime).trim();
+      if (!iso.endsWith("Z") && !iso.includes("+") && !iso.includes("-", 10)) {
+        iso = iso + "Z";
+      }
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) {
+        const fallbackD = new Date(rawTime);
+        return isNaN(fallbackD.getTime()) ? String(rawTime) : fallbackD.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      }
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch {
+      return String(rawTime);
+    }
+  };
+
+  const getFullTimestampTooltip = (timestampStart?: string, createdAt?: string) => {
+    try {
+      const startIso = timestampStart ? (timestampStart.endsWith("Z") || timestampStart.includes("+") ? timestampStart : timestampStart + "Z") : "";
+      const createdIso = createdAt ? (createdAt.endsWith("Z") || createdAt.includes("+") ? createdAt : createdAt + "Z") : "";
+      const startStr = startIso ? new Date(startIso).toLocaleString() : "N/A";
+      const createdStr = createdIso ? new Date(createdIso).toLocaleString() : "N/A";
+      return `Watch Start: ${startStr}\nDB Synced: ${createdStr}`;
+    } catch {
+      return `Start: ${timestampStart || "N/A"}`;
+    }
+  };
+
   return (
     <div className="space-y-10">
       {/* Toast notification overlay */}
@@ -547,7 +578,7 @@ export function Dashboard({ user }: DashboardProps) {
                                   {meta.official_title || browserEv.content_title}
                                 </h4>
                                 <p className="text-[10px] font-mono text-slate-400 mt-0.5">
-                                  {meta.channel_name || "YouTube Stream"} • {formatDuration(browserEv.duration_seconds)}
+                                  {meta.channel_name || "YouTube Stream"} • {formatDuration(browserEv.duration_seconds)} • {formatEventTimestamp(browserEv.timestamp_start, browserEv.created_at || enriched.updated_at)}
                                 </p>
                               </div>
 
@@ -618,13 +649,26 @@ export function Dashboard({ user }: DashboardProps) {
                 <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
                   <div className="max-h-96 overflow-y-auto divide-y divide-slate-100">
                     {recentEvents.map((e: any, i: number) => {
+                      const extractVid = (urlStr: string) => {
+                        if (!urlStr) return null;
+                        const shortsMatch = urlStr.match(/\/shorts\/([^?&#]+)/);
+                        if (shortsMatch) return shortsMatch[1];
+                        const watchMatch = urlStr.match(/[?&]v=([^&#]+)/);
+                        if (watchMatch) return watchMatch[1];
+                        const youtuMatch = urlStr.match(/youtu\.be\/([^?&#]+)/);
+                        if (youtuMatch) return youtuMatch[1];
+                        const embedMatch = urlStr.match(/\/embed\/([^?&#]+)/);
+                        if (embedMatch) return embedMatch[1];
+                        return null;
+                      };
+
+                      const rawVid = extractVid(e.url);
                       const matchingEnriched = recentEnrichedEvents.find((ee: any) => {
                         const enrichedUrl = ee.browser_event?.url || "";
                         if (!enrichedUrl || !e.url) return false;
                         if (enrichedUrl === e.url) return true;
-                        const v1 = e.url.match(/[?&]v=([^&]+)/)?.[1];
-                        const v2 = enrichedUrl.match(/[?&]v=([^&]+)/)?.[1];
-                        return Boolean(v1 && v2 && v1 === v2);
+                        const enrichedVid = ee.youtube_metadata?.video_id || extractVid(enrichedUrl);
+                        return Boolean(rawVid && enrichedVid && rawVid === enrichedVid);
                       });
                       const displayTitle = matchingEnriched?.youtube_metadata?.official_title || e.content_title || "YouTube Event";
 
@@ -638,7 +682,12 @@ export function Dashboard({ user }: DashboardProps) {
                           </div>
                           <div className="text-right shrink-0">
                             <span className="font-mono text-xs font-bold text-slate-800 block">{formatDuration(e.duration_seconds)}</span>
-                            <span className="text-[9px] font-mono text-slate-400 block">{new Date(e.created_at || e.timestamp_start).toLocaleTimeString()}</span>
+                            <span
+                              className="text-[9px] font-mono text-slate-400 block cursor-help"
+                              title={getFullTimestampTooltip(e.timestamp_start, e.created_at)}
+                            >
+                              {formatEventTimestamp(e.timestamp_start, e.created_at)}
+                            </span>
                           </div>
                         </div>
                       );

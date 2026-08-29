@@ -168,7 +168,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Same video resume: preserve session and resume playback time accumulation
     if (currentSession && currVid && newVid && currVid === newVid) {
       console.log("Same video already being tracked. Resuming current session for video ID:", currVid);
-      currentSession.content_title = message.title || currentSession.content_title;
+      // If the incoming message has a specific non-placeholder title, update it
+      if (message.title && message.title !== "YouTube Short" && message.title !== "YouTube Video") {
+        currentSession.content_title = message.title;
+      } else if (!currentSession.content_title || currentSession.content_title === "YouTube Short" || currentSession.content_title === "YouTube Video") {
+        currentSession.content_title = message.title || currentSession.content_title;
+      }
       currentSession.url = message.url || currentSession.url;
       if (!currentSession.is_playing) {
         currentSession.is_playing = true;
@@ -215,26 +220,30 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 async function finalizeSession() {
   if (!currentSession) return;
+  const sessionToFinalize = currentSession;
+  currentSession = null;
 
-  if (currentSession.is_playing) {
-    accumulatePlaybackTime();
+  if (sessionToFinalize.is_playing && sessionToFinalize.last_playback_start) {
+    sessionToFinalize.watch_time_ms += Date.now() - sessionToFinalize.last_playback_start;
+    sessionToFinalize.last_playback_start = null;
+    sessionToFinalize.is_playing = false;
   }
 
   const endTime = new Date();
-  const durationSeconds = Math.round((currentSession.watch_time_ms || 0) / 1000);
+  const durationSeconds = Math.round((sessionToFinalize.watch_time_ms || 0) / 1000);
 
   if (durationSeconds >= 5) {
-    let cleanUrl = currentSession.url || "https://www.youtube.com";
+    let cleanUrl = sessionToFinalize.url || "https://www.youtube.com";
     if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
       cleanUrl = "https://" + cleanUrl;
     }
 
     const eventPayload = {
-      user_id: String(currentSession.user_id || "U123_TEST"),
-      platform: String(currentSession.platform || "youtube"),
-      content_title: String(currentSession.content_title || "YouTube Video"),
+      user_id: String(sessionToFinalize.user_id || "U123_TEST"),
+      platform: String(sessionToFinalize.platform || "youtube"),
+      content_title: String(sessionToFinalize.content_title || "YouTube Video"),
       url: cleanUrl,
-      timestamp_start: currentSession.timestamp_start,
+      timestamp_start: sessionToFinalize.timestamp_start,
       timestamp_end: endTime.toISOString(),
       duration_seconds: durationSeconds
     };

@@ -1,33 +1,15 @@
+#!/usr/bin/env python3
+"""
+CLI entrypoint to export real training dataset from MongoDB to ml/training_dataset.csv.
+"""
+import sys
 import os
-import json
-import csv
 
-def export_training_dataset():
-    """
-    Export training dataset from MongoDB/JSON into training_dataset.csv
-    """
-    output_file = "training_dataset.csv"
-    headers = [
-        "user_id",
-        "avg_session_duration",
-        "late_night_ratio",
-        "topic_diversity",
-        "learning_ratio",
-        "activity_consistency",
-        "openness",
-        "conscientiousness",
-        "extraversion",
-        "agreeableness",
-        "neuroticism"
-    ]
-    
-    if os.path.exists(output_file):
-        print(f"Dataset already generated at {output_file}")
-    else:
-        with open(output_file, mode="w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(headers)
-        print(f"Initialized blank training dataset at {output_file}")
+# Ensure root and ml directories are on sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ml"))
+
+from ml.export_real_dataset import main
 
 if __name__ == "__main__":
-    export_training_dataset()
+    main()

@@ -4,8 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 from pydantic import BaseModel, HttpUrl, EmailStr
 from enrichment_service import enrich_event_pipeline, generate_event_id
+from youtube_service import extract_video_id
 from motor.motor_asyncio import AsyncIOMotorClient
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import os
 import httpx
 import logging
@@ -25,6 +26,10 @@ from typing import List, Optional, Dict, Any
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def utc_now_iso() -> str:
+    """Returns an unambiguous, timezone-aware ISO 8601 UTC timestamp."""
+    return datetime.now(timezone.utc).isoformat()
 
 app = FastAPI()
 
@@ -124,7 +129,7 @@ def create_jwt(user_id: str, email: str) -> str:
     payload = {
         "user_id": user_id,
         "email": email,
-        "exp": datetime.utcnow() + timedelta(days=7)
+        "exp": datetime.now(timezone.utc) + timedelta(days=7)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
@@ -384,7 +389,7 @@ async def n8n_health():
         "status": "healthy" if is_configured else "unconfigured",
         "n8n_webhook_configured": is_configured,
         "webhook_url_set": is_configured,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": utc_now_iso()
     }
 
 @app.get("/api/n8n/status")
@@ -396,7 +401,7 @@ async def n8n_status():
         "n8n_webhook_configured": is_configured,
         "webhook_url_set": is_configured,
         "webhook_url": N8N_WEBHOOK_URL if is_configured else None,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": utc_now_iso()
     }
 
 @app.post("/api/n8n/trigger")
@@ -413,7 +418,7 @@ async def n8n_trigger(payload: Optional[N8nTriggerRequest] = Body(None)):
     trigger_payload = {
         "user_id": user_id,
         "event_count": event_count,
-        "triggered_at": datetime.utcnow().isoformat()
+        "triggered_at": utc_now_iso()
     }
 
     if not N8N_WEBHOOK_URL:
@@ -457,7 +462,7 @@ async def signup(response: Response, payload: SignupRequest):
         "user_id": user_id,
         "email": payload.email,
         "password": hashed,
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": utc_now_iso()
     }
     
     await db.users.insert_one(user_doc)
@@ -539,7 +544,7 @@ async def save_consent(payload: ConsentRequest, current_user: dict = Depends(get
     user_id = current_user["user_id"]
     await db.consents.update_one(
         {"user_id": user_id},
-        {"$set": {"consent_given": payload.consent_given, "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"consent_given": payload.consent_given, "updated_at": utc_now_iso()}},
         upsert=True
     )
     return {"user_id": user_id, "consent_given": payload.consent_given}
@@ -561,7 +566,7 @@ async def withdraw_consent(current_user: dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
     await db.consents.update_one(
         {"user_id": user_id},
-        {"$set": {"consent_given": False, "updated_at": datetime.utcnow().isoformat()}}
+        {"$set": {"consent_given": False, "updated_at": utc_now_iso()}}
     )
     return {"success": True, "message": "Consent withdrawn"}
 
@@ -600,7 +605,8 @@ async def store_event(event: EventPayload, background_tasks: BackgroundTasks):
 
     event_dict = event.dict()
     event_dict["url"] = str(event_dict["url"])
-    event_dict["created_at"] = datetime.utcnow().isoformat()
+    now_iso = utc_now_iso()
+    event_dict["created_at"] = now_iso
     
     # A raw event represents one finalized watch session. Retries carry the same
     # immutable session payload, while a later watch has a new timestamp_start.
@@ -617,7 +623,7 @@ async def store_event(event: EventPayload, background_tasks: BackgroundTasks):
     if duplicate_event:
         logger.info(f"Ignored retry of existing watch event for user {event.user_id}")
     else:
-        event_dict["updated_at"] = datetime.utcnow().isoformat()
+        event_dict["updated_at"] = now_iso
         await db.raw_events.insert_one(event_dict)
         logger.info(f"Event stored for user {event.user_id}")
 
@@ -667,19 +673,6 @@ def get_ocean_prediction(features: dict) -> dict:
         os.path.exists(os.path.join(model_dir, "personality_model.pkl"))
     )
 
-    if not has_model:
-        try:
-            sys.path.insert(0, model_dir)
-            from build_model_artifacts import build_and_save_artifacts
-            logger.info("[OCEAN Model] Model artifacts missing. Auto-bootstrapping baseline supervised model artifacts in ./ml/...")
-            build_and_save_artifacts()
-            has_model = os.path.exists(scaler_path) and (
-                os.path.exists(os.path.join(model_dir, "personality_model.keras")) or
-                os.path.exists(os.path.join(model_dir, "personality_model.pkl"))
-            )
-        except Exception as bootstrap_err:
-            logger.error(f"[OCEAN Model] Failed to auto-bootstrap ML model artifacts: {bootstrap_err}")
-
     if has_model:
         from ml.predict import predict_personality
         res = predict_personality(features, model_dir=model_dir)
@@ -688,7 +681,11 @@ def get_ocean_prediction(features: dict) -> dict:
     else:
         use_fallback = os.getenv("USE_HEURISTIC_FALLBACK", "false").lower() in ("true", "1", "yes")
         if not use_fallback:
-            raise FileNotFoundError("ML model files (scaler.pkl, personality_model.keras/pkl) not found in ./ml/ and USE_HEURISTIC_FALLBACK is disabled.")
+            raise FileNotFoundError(
+                "Production ML model files (scaler.pkl, personality_model.keras/pkl) not found in ./ml/. "
+                "Silent synthetic auto-bootstrapping has been permanently disabled. "
+                "Please train and promote a real candidate model or enable USE_HEURISTIC_FALLBACK=true."
+            )
         logger.warning("[OCEAN Model] Model files missing in ./ml/. Utilizing explicitly enabled heuristic fallback.")
         scores = calculate_ocean_scores(features)
         return {
@@ -809,7 +806,7 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
             "repetition_score": round(repetitive, 3),
             "activity_consistency": round(consistency, 3),
             "avg_sentiment": round(avg_sent, 3),
-            "processed_at": datetime.utcnow().isoformat()
+            "processed_at": utc_now_iso()
         }
 
         await db.user_features.update_one({"user_id": user_id}, {"$set": features}, upsert=True)
@@ -822,7 +819,7 @@ async def process_data_for_user(user_id: str) -> Optional[dict]:
                 "engagement_signal": "High" if total_time > 3600 else ("Moderate" if total_time > 60 else "Low"),
                 "emotional_stability_signal": "High" if sent_var < 1.0 else "Variable"
             },
-            "derived_at": datetime.utcnow().isoformat()
+            "derived_at": utc_now_iso()
         }
 
         await db.behavior_profiles.update_one({"user_id": user_id}, {"$set": profile}, upsert=True)
@@ -863,7 +860,7 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
                 "delta": delta
             }
 
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = utc_now_iso()
         await db.processing_status.update_one(
             {"user_id": user_id},
             {
@@ -897,7 +894,7 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
             "feature_version": "v1",
             "prediction_version": "v1",
             "event_count_at_prediction": current_event_count,
-            "predicted_at": datetime.utcnow().isoformat()
+            "predicted_at": utc_now_iso()
         }
         await db.personality_predictions.update_one(
             {"user_id": user_id},
@@ -913,7 +910,7 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
                     "user_id": user_id,
                     "scores": ocean_scores,
                     "prediction_method": prediction_method,
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": utc_now_iso(),
                     "event_count_at_prediction": current_event_count
                 }
             },
@@ -926,7 +923,7 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
             {
                 "$set": {
                     "last_processed_event_count": current_event_count,
-                    "last_processed_at": datetime.utcnow().isoformat(),
+                    "last_processed_at": utc_now_iso(),
                     "pipeline_status": "completed",
                     "pipeline_version": "v1"
                 }
@@ -941,7 +938,7 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
                 "$set": {
                     "user_id": user_id,
                     "last_processed_event_count": current_event_count,
-                    "last_processed_at": datetime.utcnow().isoformat(),
+                    "last_processed_at": utc_now_iso(),
                     "processing_status": "completed",
                     "processing_in_progress": False,
                     "total_events": current_event_count
@@ -961,12 +958,20 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
                             "event_count": current_event_count,
                             "last_processed_event_count": current_event_count,
                             "processed": True,
-                            "timestamp": datetime.utcnow().isoformat()
+                            "timestamp": utc_now_iso()
                         },
                         timeout=5.0
                     )
             except Exception as n8n_err:
                 logger.warning(f"Optional n8n webhook notice failed: {n8n_err}")
+
+        # 8. ML Training Dataset Auto-Sync Hook (Idempotent real-user dataset sync)
+        try:
+            from ml.export_real_dataset import sync_user_to_training_dataset
+            sync_res = await sync_user_to_training_dataset(user_id, db)
+            logger.info(f"[ML Training Dataset Auto-Sync] Pipeline sync for user {user_id}: {sync_res.get('action')} (eligible={sync_res.get('is_eligible')})")
+        except Exception as sync_err:
+            logger.warning(f"[ML Training Dataset Auto-Sync] Sync hook notice for user {user_id}: {sync_err}")
 
         logger.info(f"[run_pipeline_for_user] Success for user {user_id} at {current_event_count} events.")
         return {
@@ -987,7 +992,7 @@ async def run_pipeline_for_user(user_id: str) -> Optional[dict]:
                             "processing_status": "failed",
                             "processing_in_progress": False,
                             "last_error": str(pipeline_err),
-                            "failed_at": datetime.utcnow().isoformat()
+                            "failed_at": utc_now_iso()
                         }
                     },
                     upsert=True
@@ -1101,7 +1106,7 @@ async def preprocess(payload: Optional[PreprocessRequest] = Body(None)):
                 {
                     "$set": {
                         "preprocessed_dataset_packaged": True,
-                        "last_preprocessed_at": datetime.utcnow().isoformat(),
+                        "last_preprocessed_at": utc_now_iso(),
                         "preprocessed_events_count": len(events)
                     }
                 },
@@ -1116,7 +1121,7 @@ async def preprocess(payload: Optional[PreprocessRequest] = Body(None)):
             "user_id": user_id,
             "processed_events_count": len(events),
             "next_stages_ready": ["feature-engineering", "behavior-model", "ocean-model", "generate-explanation"],
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": utc_now_iso()
         }
     except Exception as error:
         logger.error(f"[Preprocess API] Processing failed for user: {user_id}. Error: {error}")
@@ -1162,7 +1167,7 @@ async def feature_engineering(payload: Optional[PipelineStageRequest] = Body(Non
                 "repetition_score": 0.0,
                 "activity_consistency": 1.0,
                 "avg_sentiment": 0.0,
-                "processed_at": datetime.utcnow().isoformat()
+                "processed_at": utc_now_iso()
             }
         else:
             def get_be(e_dict):
@@ -1220,7 +1225,7 @@ async def feature_engineering(payload: Optional[PipelineStageRequest] = Body(Non
                 "repetition_score": repetitive,
                 "activity_consistency": consistency,
                 "avg_sentiment": avg_sent,
-                "processed_at": datetime.utcnow().isoformat()
+                "processed_at": utc_now_iso()
             }
 
         if db is not None:
@@ -1237,7 +1242,7 @@ async def feature_engineering(payload: Optional[PipelineStageRequest] = Body(Non
             "user_id": user_id,
             "features": features,
             "next_stage": "behavior-model",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": utc_now_iso()
         }
     except Exception as error:
         logger.error(f"[Feature Engineering API] Failed for user: {user_id}. Error: {error}")
@@ -1278,7 +1283,7 @@ async def behavior_model(payload: Optional[PipelineStageRequest] = Body(None)):
         profile = {
             "user_id": user_id,
             "signals": signals,
-            "derived_at": datetime.utcnow().isoformat()
+            "derived_at": utc_now_iso()
         }
 
         if db is not None:
@@ -1295,7 +1300,7 @@ async def behavior_model(payload: Optional[PipelineStageRequest] = Body(None)):
             "user_id": user_id,
             "signals": signals,
             "next_stage": "ocean-model",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": utc_now_iso()
         }
     except Exception as error:
         logger.error(f"[Behavior Model API] Error: {error}")
@@ -1327,7 +1332,7 @@ async def ocean_model(payload: Optional[PipelineStageRequest] = Body(None)):
                 prediction_doc = {
                     "user_id": user_id,
                     "scores": ocean_scores,
-                    "predicted_at": datetime.utcnow().isoformat(),
+                    "predicted_at": utc_now_iso(),
                     "prediction_version": "v1"
                 }
                 await db.personality_predictions.update_one(
@@ -1337,7 +1342,7 @@ async def ocean_model(payload: Optional[PipelineStageRequest] = Body(None)):
                 )
                 await db.ocean_predictions.update_one(
                     {"user_id": user_id},
-                    {"$set": {"user_id": user_id, "scores": ocean_scores, "updated_at": datetime.utcnow().isoformat()}},
+                    {"$set": {"user_id": user_id, "scores": ocean_scores, "updated_at": utc_now_iso()}},
                     upsert=True
                 )
             except Exception as e:
@@ -1350,7 +1355,7 @@ async def ocean_model(payload: Optional[PipelineStageRequest] = Body(None)):
             "user_id": user_id,
             "ocean_scores": ocean_scores,
             "next_stage": "generate-explanation",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": utc_now_iso()
         }
     except Exception as error:
         logger.error(f"[OCEAN Model API] Error: {error}")
@@ -1378,7 +1383,7 @@ async def generate_explanation(payload: Optional[PipelineStageRequest] = Body(No
             "message": "Personality explanation generated",
             "user_id": user_id,
             "explanation": explanation,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": utc_now_iso()
         }
     except Exception as error:
         logger.error(f"[Generate Explanation API] Error: {error}")
@@ -1449,23 +1454,22 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
             ym_dict = ym if isinstance(ym, dict) else {}
             e_url = be_dict.get("url") or ""
             e_title = ym_dict.get("official_title")
-            if e_url and e_title and e_title not in ["Unknown YouTube Video", "YouTube Video"]:
-                official_title_map[e_url] = e_title
-                if "v=" in e_url:
-                    vid = e_url.split("v=")[1].split("&")[0]
-                    if vid:
-                        official_title_map[vid] = e_title
+            vid = ym_dict.get("video_id") or extract_video_id(e_url)
+            if e_title and e_title not in ["Unknown YouTube Video", "YouTube Video"]:
+                if e_url:
+                    official_title_map[e_url] = e_title
+                if vid:
+                    official_title_map[vid] = e_title
 
         for re in raw_events:
             if not isinstance(re, dict):
                 continue
             r_url = re.get("url") or ""
+            r_vid = extract_video_id(r_url)
             if r_url in official_title_map:
                 re["content_title"] = official_title_map[r_url]
-            elif "v=" in r_url:
-                vid = r_url.split("v=")[1].split("&")[0]
-                if vid in official_title_map:
-                    re["content_title"] = official_title_map[vid]
+            elif r_vid and r_vid in official_title_map:
+                re["content_title"] = official_title_map[r_vid]
 
         if raw_events:
             valid_raw = [e for e in raw_events if isinstance(e, dict)]
@@ -1485,7 +1489,7 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
                     "repetition_score": 0.0,
                     "activity_consistency": 1.0,
                     "avg_sentiment": avg_sent,
-                    "processed_at": datetime.utcnow().isoformat()
+                    "processed_at": utc_now_iso()
                 }
             else:
                 features["total_watch_time"] = max(safe_float(features.get("total_watch_time")), total_time)
@@ -1502,14 +1506,14 @@ async def get_dashboard(request: Request, user_id: Optional[str] = None):
         def event_time(e):
             if not isinstance(e, dict):
                 return ""
-            return parse_time_str(e.get("created_at") or e.get("timestamp_start"))
+            return parse_time_str(e.get("timestamp_start") or e.get("created_at"))
 
         def enriched_time(e):
             if not isinstance(e, dict):
                 return ""
             be = e.get("browser_event")
             be_dict = be if isinstance(be, dict) else {}
-            return parse_time_str(be_dict.get("created_at") or be_dict.get("timestamp_start"))
+            return parse_time_str(be_dict.get("timestamp_start") or be_dict.get("created_at"))
 
         sorted_events = sorted(raw_events, key=event_time, reverse=True)
         sorted_enriched = sorted(enriched_events, key=enriched_time, reverse=True)
@@ -1579,7 +1583,7 @@ async def questionnaire_submit(payload: BfiSubmissionRequest, request: Request):
             "user_id": user_id.strip(),
             "questionnaire_type": "BFI-44",
             "responses": formatted_responses,
-            "completed_at": datetime.utcnow().isoformat(),
+            "completed_at": utc_now_iso(),
             "consent_version": payload.consent_version or "v1.0",
             "status": "completed",
             "scores": scores
@@ -1591,6 +1595,14 @@ async def questionnaire_submit(payload: BfiSubmissionRequest, request: Request):
                 {"$set": questionnaire_doc},
                 upsert=True
             )
+
+            # ML Training Dataset Auto-Sync Hook upon BFI-44 submission
+            try:
+                from ml.export_real_dataset import sync_user_to_training_dataset
+                sync_res = await sync_user_to_training_dataset(user_id.strip(), db)
+                logger.info(f"[ML Training Dataset Auto-Sync] Questionnaire submit sync for {user_id.strip()}: {sync_res.get('action')} (eligible={sync_res.get('is_eligible')})")
+            except Exception as sync_err:
+                logger.warning(f"[ML Training Dataset Auto-Sync] Questionnaire submit sync notice for {user_id.strip()}: {sync_err}")
 
         return {
             "status": "success",
@@ -1657,74 +1669,28 @@ async def export_training_dataset(format: Optional[str] = Query(None)):
         return JSONResponse(status_code=500, content={"status": "failed", "error": "Database unavailable"})
 
     try:
-        all_user_features = await db.user_features.find({}).to_list(1000)
-        all_questionnaires = await db.questionnaire_responses.find({"questionnaire_type": "BFI-44"}).to_list(1000)
-        all_users = await db.users.find({}).to_list(1000)
+        from ml.export_real_dataset import sync_real_training_dataset
+        ml_dir = os.path.join(os.getcwd(), "ml")
+        result = await sync_real_training_dataset(db, output_dir=ml_dir)
 
-        user_ids = set()
-        features_map = {}
-        for uf in all_user_features:
-            if uf.get("user_id"):
-                user_ids.add(uf["user_id"])
-                features_map[uf["user_id"]] = uf
-
-        questionnaires_map = {}
-        for q in all_questionnaires:
-            if q.get("user_id"):
-                user_ids.add(q["user_id"])
-                questionnaires_map[q["user_id"]] = q
-
-        for u in all_users:
-            if u.get("user_id"):
-                user_ids.add(u["user_id"])
-
-        dataset_rows = []
-        for uid in user_ids:
-            feat = features_map.get(uid)
-            quest = questionnaires_map.get(uid)
-
-            ocean_scores = quest.get("scores") if quest else None
-            if not ocean_scores and quest and quest.get("responses"):
-                ocean_scores = calculate_bfi44_scores(quest["responses"])
-
-            row = {
-                "user_id": uid,
-                "avg_session_duration": round(feat.get("avg_session_duration", 0), 2) if feat else 0,
-                "late_night_ratio": round(feat.get("late_night_ratio", 0), 3) if feat else 0,
-                "topic_diversity": round(feat.get("topic_diversity", 0), 3) if feat else 0,
-                "learning_ratio": round(feat.get("learning_ratio", 0), 3) if feat else 0,
-                "activity_consistency": round(feat.get("activity_consistency", 0), 3) if feat else 0,
-                "openness": ocean_scores.get("openness", "") if ocean_scores else "",
-                "conscientiousness": ocean_scores.get("conscientiousness", "") if ocean_scores else "",
-                "extraversion": ocean_scores.get("extraversion", "") if ocean_scores else "",
-                "agreeableness": ocean_scores.get("agreeableness", "") if ocean_scores else "",
-                "neuroticism": ocean_scores.get("neuroticism", "") if ocean_scores else ""
-            }
-            dataset_rows.append(row)
-
-        csv_headers = [
-            "user_id", "avg_session_duration", "late_night_ratio", "topic_diversity",
-            "learning_ratio", "activity_consistency", "openness", "conscientiousness",
-            "extraversion", "agreeableness", "neuroticism"
-        ]
-
-        csv_lines = [",".join(csv_headers)]
-        for r in dataset_rows:
-            csv_lines.append(",".join(str(r.get(h, "")) for h in csv_headers))
-
-        csv_content = "\n".join(csv_lines) + "\n"
-
-        csv_file_path = os.path.join(os.getcwd(), "training_dataset.csv")
-        with open(csv_file_path, "w", encoding="utf-8") as f:
-            f.write(csv_content)
+        # Also maintain copy at root training_dataset.csv for backward compatibility
+        root_csv_path = os.path.join(os.getcwd(), "training_dataset.csv")
+        if os.path.exists(result["csv_path"]) and result["csv_path"] != root_csv_path:
+            import shutil
+            shutil.copy2(result["csv_path"], root_csv_path)
 
         if format == "json":
             return {
                 "status": "success",
-                "count": len(dataset_rows),
-                "file_path": "training_dataset.csv",
-                "data": dataset_rows
+                "count": result["eligible_users_count"],
+                "file_path": "ml/training_dataset.csv",
+                "synthetic_data_used": False,
+                "user_ids": result["user_ids"],
+                "provenance": result.get("provenance")
             }
+
+        with open(result["csv_path"], "r", encoding="utf-8") as f:
+            csv_content = f.read()
 
         return Response(
             content=csv_content,
@@ -1805,7 +1771,7 @@ async def register_extension(payload: ExtensionRegisterRequest):
     del pairing_tokens[token]
 
     ext_token = jwt.encode(
-        {"user_id": target_user_id, "scope": "telemetry_ingest", "exp": datetime.utcnow() + timedelta(days=365)},
+        {"user_id": target_user_id, "scope": "telemetry_ingest", "exp": datetime.now(timezone.utc) + timedelta(days=365)},
         JWT_SECRET,
         algorithm="HS256"
     )
@@ -1821,54 +1787,72 @@ async def register_extension(payload: ExtensionRegisterRequest):
 @app.post("/api/ml/train")
 @app.get("/api/ml/train")
 async def train_ml_model():
-    ml_script = os.path.join(os.getcwd(), "ml", "train_personality_model.py")
-    cmd = f"python3 {ml_script} /ml training_dataset.csv"
-    logger.info(f"[ML Pipeline] Executing: {cmd}")
-
+    """
+    Executes real-data candidate model training pipeline with user-isolated Cross-Validation.
+    Saves candidate model artifacts and metrics without overwriting production files.
+    """
     try:
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if proc.returncode != 0:
-            return JSONResponse(status_code=500, content={
-                "status": "failed",
-                "error": "ML training execution failed",
-                "details": proc.stderr,
-                "output": proc.stdout
-            })
+        from ml.train_personality_model import train_candidate_pipeline
+        from ml.export_real_dataset import sync_real_training_dataset
 
-        history_path = os.path.join(os.getcwd(), "ml", "training_history.json")
-        history_data = None
-        if os.path.exists(history_path):
-            try:
-                with open(history_path, "r") as f:
-                    history_data = json.load(f)
-            except Exception as e:
-                logger.warning(f"Could not parse training_history.json: {e}")
+        # 1. Sync latest eligible real users from MongoDB source of truth
+        if db is not None:
+            await sync_real_training_dataset(db)
+
+        csv_path = os.path.join(os.getcwd(), "ml", "training_dataset.csv")
+        output_dir = os.path.join(os.getcwd(), "ml")
+
+        results = train_candidate_pipeline(csv_path=csv_path, output_dir=output_dir)
 
         return {
             "status": "success",
-            "message": "TensorFlow personality model trained successfully",
-            "output": proc.stdout,
+            "message": "Candidate real-data personality model trained and cross-validated successfully",
+            "synthetic_data_used": False,
             "artifacts": [
-                "/ml/personality_model.keras",
-                "/ml/scaler.pkl",
+                "/ml/personality_model_candidate_real.pkl",
+                "/ml/scaler_candidate_real.pkl",
+                "/ml/candidate_evaluation_metrics.json",
                 "/ml/training_history.json",
                 "/ml/training_loss.png",
-                "/ml/training_mae.png"
+                "/ml/training_mae.png",
+                "/ml/evaluation_metrics_plot.png"
             ],
-            "results": history_data
+            "dataset_samples": results.get("dataset_samples"),
+            "cross_validation_strategy": results.get("cross_validation_strategy"),
+            "candidate_evaluation_metrics": results.get("evaluation_metrics"),
+            "note": "Candidate model trained. Production artifacts (personality_model.pkl, scaler.pkl) remain untouched until explicit promotion."
         }
     except Exception as error:
+        logger.error(f"[ML Candidate Training API] Error: {error}")
+        return JSONResponse(status_code=500, content={"status": "failed", "error": str(error)})
+
+@app.post("/api/ml/candidate/promote")
+async def promote_ml_candidate():
+    """
+    Explicit promotion gate: Promotes candidate real-data model to production.
+    """
+    try:
+        from ml.train_personality_model import promote_candidate_to_production
+        output_dir = os.path.join(os.getcwd(), "ml")
+        promo_res = promote_candidate_to_production(output_dir=output_dir)
+        return promo_res
+    except Exception as error:
+        logger.error(f"[ML Candidate Promotion API] Error: {error}")
         return JSONResponse(status_code=500, content={"status": "failed", "error": str(error)})
 
 @app.get("/api/ml/metrics")
 async def get_ml_metrics():
+    candidate_metrics_path = os.path.join(os.getcwd(), "ml", "candidate_evaluation_metrics.json")
     history_path = os.path.join(os.getcwd(), "ml", "training_history.json")
-    if not os.path.exists(history_path):
-        return JSONResponse(status_code=404, content={"status": "error", "message": "No model training metrics found. Please trigger model training."})
+
+    metrics_file = candidate_metrics_path if os.path.exists(candidate_metrics_path) else history_path
+
+    if not os.path.exists(metrics_file):
+        return JSONResponse(status_code=404, content={"status": "error", "message": "No model training metrics found. Please trigger candidate model training."})
     try:
-        with open(history_path, "r") as f:
-            history_data = json.load(f)
-        return {"status": "success", "data": history_data}
+        with open(metrics_file, "r", encoding="utf-8") as f:
+            metrics_data = json.load(f)
+        return {"status": "success", "data": metrics_data}
     except Exception as error:
         return JSONResponse(status_code=500, content={"status": "error", "message": str(error)})
 

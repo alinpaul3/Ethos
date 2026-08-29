@@ -170,6 +170,22 @@ export async function enrichEventPipeline(eventData: any, db: any): Promise<Enri
         { upsert: true }
       );
       console.log(`[ENRICHMENT] Stored final enriched event (event_id=${eventId}, status=${enrichmentStatus}) for user ${userId}`);
+
+      // Update matching raw events with official title
+      const officialTitle = youtubeMetadata?.official_title;
+      if (officialTitle && officialTitle !== "Unknown YouTube Video" && officialTitle !== "YouTube Video" && officialTitle !== "YouTube Short") {
+        const rawCollection = db.collection("raw_events");
+        await rawCollection.updateMany(
+          {
+            user_id: userId,
+            $or: [
+              { url },
+              { url: { $regex: videoId } }
+            ]
+          },
+          { $set: { content_title: officialTitle } }
+        );
+      }
     } catch (err) {
       console.error("[ENRICHMENT] Failed to save enriched event to database collection:", err);
     }

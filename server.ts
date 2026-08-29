@@ -12,6 +12,7 @@ import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 import { connectToDatabase } from "./server/mongodb.ts";
+import { extractVideoId } from "./server/youtube_service.ts";
 import { enrichEventPipeline } from "./server/enrichment_service.ts";
 import { validateBfi44Responses, calculateBfi44Scores } from "./server/bfi44.ts";
 
@@ -1044,11 +1045,11 @@ async function startServer() {
 
       const result = await runPipelineForUser(user_id, collections);
       if (!result) {
-        const profile = await processDataForUser(user_id, collections);
+        const profile: any = await processDataForUser(user_id, collections);
         if (!profile) {
           return res.status(404).json({ message: "No events found or failed to process" });
         }
-        return res.json({ message: "Processing completed (fallback)", user_id, summary: profile.signals });
+        return res.json({ message: "Processing completed (fallback)", user_id, summary: profile.signals || profile.profile?.signals });
       }
       return res.json({ message: "Processing completed", user_id, result });
     } catch (error: any) {
@@ -1406,6 +1407,7 @@ async function startServer() {
     try {
       const { exec } = await import("child_process");
       const pythonCmd = process.platform === "win32" ? "python" : "python3";
+      const mlScript = path.join(process.cwd(), "ml", "train_personality_model.py");
       exec(`${pythonCmd} "${mlScript}" ml training_dataset.csv`, async (err, stdout, stderr) => {
         if (err) {
           console.error("[ML Pipeline] Python training error:", stderr || err.message);
@@ -1492,7 +1494,10 @@ async function startServer() {
         return res.status(400).json({ status: "failed", error: "Missing feature vector or valid user_id" });
       }
 
+      const { exec } = await import("child_process");
       const pythonCmd = process.platform === "win32" ? "python" : "python3";
+      const predictScript = path.join(process.cwd(), "ml", "test_inference.py");
+      const jsonArg = JSON.stringify(featurePayload).replace(/"/g, '\\"');
       exec(`${pythonCmd} "${predictScript}" "${jsonArg}"`, (err, stdout, stderr) => {
         if (err) {
           return res.status(500).json({ status: "failed", error: stderr || err.message });
@@ -1701,37 +1706,33 @@ async function startServer() {
       for (const ee of enrichedEvents) {
         const url = ee.browser_event?.url || "";
         const title = ee.youtube_metadata?.official_title;
-        if (url && title && title !== "Unknown YouTube Video" && title !== "YouTube Video") {
-          officialTitleMap[url] = title;
-          const match = url.match(/[?&]v=([^&]+)/);
-          if (match && match[1]) {
-            officialTitleMap[match[1]] = title;
-          }
+        const vid = ee.youtube_metadata?.video_id || extractVideoId(url);
+        if (title && title !== "Unknown YouTube Video" && title !== "YouTube Video" && title !== "YouTube Short") {
+          if (url) officialTitleMap[url] = title;
+          if (vid) officialTitleMap[vid] = title;
         }
       }
 
       for (const re of events) {
+        const rVid = re.url ? extractVideoId(re.url) : null;
         if (re.url && officialTitleMap[re.url]) {
           re.content_title = officialTitleMap[re.url];
-        } else if (re.url) {
-          const match = re.url.match(/[?&]v=([^&]+)/);
-          if (match && match[1] && officialTitleMap[match[1]]) {
-            re.content_title = officialTitleMap[match[1]];
-          }
+        } else if (rVid && officialTitleMap[rVid]) {
+          re.content_title = officialTitleMap[rVid];
         }
       }
 
-      // Sort events by timestamp or created_at (descending)
+      // Sort events by timestamp_start or created_at (descending)
       const sortedEvents = events.sort((a: any, b: any) => {
-        const timeA = new Date(a.created_at || a.timestamp_start || 0).getTime();
-        const timeB = new Date(b.created_at || b.timestamp_start || 0).getTime();
+        const timeA = new Date(a.timestamp_start || a.created_at || 0).getTime();
+        const timeB = new Date(b.timestamp_start || b.created_at || 0).getTime();
         return timeB - timeA;
       });
 
-      // Sort enriched events by browser_event.created_at or timestamp_start (descending)
+      // Sort enriched events by browser_event.timestamp_start or created_at (descending)
       const sortedEnrichedEvents = enrichedEvents.sort((a: any, b: any) => {
-        const timeA = new Date(a.browser_event?.created_at || a.browser_event?.timestamp_start || 0).getTime();
-        const timeB = new Date(b.browser_event?.created_at || b.browser_event?.timestamp_start || 0).getTime();
+        const timeA = new Date(a.browser_event?.timestamp_start || a.browser_event?.created_at || 0).getTime();
+        const timeB = new Date(b.browser_event?.timestamp_start || b.browser_event?.created_at || 0).getTime();
         return timeB - timeA;
       });
 

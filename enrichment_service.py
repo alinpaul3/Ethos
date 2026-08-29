@@ -1,6 +1,7 @@
 import os
+import re
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from youtube_service import extract_video_id, fetch_youtube_metadata
 from gemini_service import analyze_video_metadata, GeminiQuotaExhaustedError
 
@@ -31,6 +32,7 @@ async def enrich_event_pipeline(event_data: dict, db=None) -> dict:
     
     event_id = generate_event_id(event_data)
     video_id = extract_video_id(url)
+    now_iso = datetime.now(timezone.utc).isoformat()
     
     if not video_id:
         print(f"[ENRICHMENT] No YouTube video ID could be extracted from: {url}")
@@ -46,13 +48,13 @@ async def enrich_event_pipeline(event_data: dict, db=None) -> dict:
                 "timestamp_start": ts_start,
                 "timestamp_end": ts_end,
                 "duration_seconds": duration,
-                "created_at": datetime.utcnow().isoformat() + "Z"
+                "created_at": now_iso
             },
             "processing_status": {
                 "youtube_metadata_fetched": False,
                 "gemini_processed": False,
                 "ready_for_processing": False,
-                "processed_at": datetime.utcnow().isoformat() + "Z"
+                "processed_at": now_iso
             }
         }
     
@@ -83,9 +85,11 @@ async def enrich_event_pipeline(event_data: dict, db=None) -> dict:
         return cached_doc
     
     if cached_content_doc:
-        print(f"[ENRICHMENT] Reusing cached content analysis for video {video_id}: event_id={event_id}")
-        youtube_metadata = cached_content_doc.get("youtube_metadata")
-        gemini_analysis = cached_content_doc.get("gemini_analysis")
+        cached_title = cached_content_doc.get("youtube_metadata", {}).get("official_title")
+        if cached_title and cached_title not in ["Unknown YouTube Video", "YouTube Video", "YouTube Short"]:
+            print(f"[ENRICHMENT] Reusing cached content analysis for video {video_id}: event_id={event_id}")
+            youtube_metadata = cached_content_doc.get("youtube_metadata")
+            gemini_analysis = cached_content_doc.get("gemini_analysis")
     elif cached_doc:
         youtube_metadata = cached_doc.get("youtube_metadata")
         gemini_analysis = cached_doc.get("gemini_analysis") if cached_doc.get("enrichment_status") == "completed" else None
@@ -124,17 +128,17 @@ async def enrich_event_pipeline(event_data: dict, db=None) -> dict:
             "timestamp_start": ts_start,
             "timestamp_end": ts_end,
             "duration_seconds": duration,
-            "created_at": datetime.utcnow().isoformat() + "Z"
+            "created_at": now_iso
         },
         "youtube_metadata": youtube_metadata,
         "gemini_analysis": gemini_analysis,
         "processing_status": {
-            "youtube_metadata_fetched": youtube_metadata.get("official_title") != content_title if youtube_metadata else False,
+            "youtube_metadata_fetched": youtube_metadata.get("official_title") not in [content_title, "Unknown YouTube Video", "YouTube Video", "YouTube Short"] if youtube_metadata else False,
             "gemini_processed": gemini_processed,
             "ready_for_processing": True,
-            "processed_at": datetime.utcnow().isoformat() + "Z"
+            "processed_at": now_iso
         },
-        "updated_at": datetime.utcnow().isoformat() + "Z"
+        "updated_at": now_iso
     }
     
     # 6. Store in MongoDB via UPSERT (idempotent write by event_id)
@@ -147,11 +151,17 @@ async def enrich_event_pipeline(event_data: dict, db=None) -> dict:
             )
             print(f"[ENRICHMENT] Gemini {'success' if gemini_processed else 'quota exhausted'}: stored event_id={event_id} (status={enrichment_status}) for user {user_id}")
               
-            # Update matching raw events with official title
+            # Update matching raw events with official title if official title is valid and not a placeholder
             official_title = youtube_metadata.get("official_title") if youtube_metadata else None
-            if official_title and official_title not in ["Unknown YouTube Video", "YouTube Video"]:
+            if official_title and official_title not in ["Unknown YouTube Video", "YouTube Video", "YouTube Short"]:
                 await db.raw_events.update_many(
-                    {"user_id": user_id, "url": url},
+                    {
+                        "user_id": user_id,
+                        "$or": [
+                            {"url": url},
+                            {"url": {"$regex": re.escape(video_id)}}
+                        ]
+                    },
                     {"$set": {"content_title": official_title}}
                 )
         except Exception as e:

@@ -60,23 +60,94 @@ if (location.hostname.includes("youtube.com")) {
     return urlStr.includes("youtube.com/watch") || urlStr.includes("youtube.com/shorts/");
   }
 
-  function getTitle() {
-    // Do NOT use og:title meta tag as YouTube SPA never updates it on internal navigation
-    const h1 = document.querySelector('h1.style-scope.ytd-watch-metadata yt-formatted-string, #title h1, h1.ytd-watch-metadata, h1.title.ytd-video-primary-info-renderer, ytd-watch-metadata #title, ytd-reel-player-header-renderer h2, .ytd-reel-player-header-renderer');
-    if (h1 && h1.innerText && h1.innerText.trim()) {
-      return h1.innerText.replace(" - YouTube", "").trim();
+  let currentTrackingVid = null;
+
+  function cleanExtractedTitle(rawTitle) {
+    if (!rawTitle || typeof rawTitle !== "string") return null;
+    const t = rawTitle
+      .replace(/\s*-\s*YouTube\s*$/i, "")
+      .replace(/\s*-\s*Shorts\s*$/i, "")
+      .trim();
+    if (!t) return null;
+    const lower = t.toLowerCase();
+    if (lower === "youtube" || lower === "shorts" || lower === "youtube shorts" || lower === "youtube video") {
+      return null;
     }
-    
-    const docTitle = document.title.replace(" - YouTube", "").trim();
-    if (docTitle && docTitle.toLowerCase() !== "youtube") {
+    return t;
+  }
+
+  function getShortsTitle() {
+    // 1. Check all active reel selectors in modern and legacy YouTube Shorts DOM
+    const activeReel = document.querySelector(
+      'ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.ytd-shorts[is-active], ytd-reel-video-renderer[is-active="true"]'
+    );
+    if (activeReel) {
+      const titleSelectors = [
+        'yt-shorts-video-title-view-model',
+        'ytd-reel-player-header-renderer h2',
+        '.ytd-reel-player-header-renderer h2',
+        'ytd-reel-player-header-renderer yt-formatted-string',
+        '#overlay h2',
+        'h2.title yt-formatted-string',
+        'h2.title',
+        '.title yt-formatted-string',
+        '.title',
+        '#shorts-player-overlay h2',
+        '#overlay #video-title',
+        '#title'
+      ];
+      for (const sel of titleSelectors) {
+        const el = activeReel.querySelector(sel);
+        if (el) {
+          const text = (el.innerText || el.textContent || "").trim();
+          const cleaned = cleanExtractedTitle(text);
+          if (cleaned) return cleaned;
+        }
+      }
+    }
+
+    // 2. Secondary check for globally visible active short title view models
+    const activeViewModel = document.querySelector('ytd-reel-video-renderer[is-active] yt-shorts-video-title-view-model');
+    if (activeViewModel) {
+      const text = (activeViewModel.innerText || activeViewModel.textContent || "").trim();
+      const cleaned = cleanExtractedTitle(text);
+      if (cleaned) return cleaned;
+    }
+
+    // DO NOT fall back to document.title on Shorts because YouTube SPA retains the previous video's document.title.
+    return "YouTube Short";
+  }
+
+  function getWatchTitle() {
+    // 1. Active watch metadata element
+    const watchTitleEl = document.querySelector(
+      'ytd-watch-metadata #title h1 yt-formatted-string, h1.style-scope.ytd-watch-metadata yt-formatted-string, #title h1, h1.ytd-watch-metadata, h1.title.ytd-video-primary-info-renderer, ytd-video-primary-info-renderer #title h1'
+    );
+    if (watchTitleEl) {
+      const text = (watchTitleEl.innerText || watchTitleEl.textContent || "").trim();
+      const cleaned = cleanExtractedTitle(text);
+      if (cleaned) return cleaned;
+    }
+
+    // 2. Fallback to document.title for regular watch pages ONLY if watchTitleEl was absent
+    const docTitle = cleanExtractedTitle(document.title);
+    if (docTitle) {
       return docTitle;
     }
 
-    if (location.href.includes("/shorts/")) {
-      return "YouTube Short";
-    }
-
     return "YouTube Video";
+  }
+
+  function getTitle() {
+    const url = location.href;
+    if (url.includes("/shorts/")) {
+      return getShortsTitle();
+    }
+    if (url.includes("/watch")) {
+      return getWatchTitle();
+    }
+    const docTitle = cleanExtractedTitle(document.title);
+    return docTitle || "YouTube Video";
   }
 
   let lastUrl = location.href;
@@ -93,8 +164,10 @@ if (location.hostname.includes("youtube.com")) {
       }
 
       if (isWatchOrShorts(location.href) && newVid) {
+        currentTrackingVid = newVid;
         notifyStart();
       } else {
+        currentTrackingVid = null;
         notifyStop();
       }
       lastUrl = location.href;
@@ -102,15 +175,41 @@ if (location.hostname.includes("youtube.com")) {
   }
 
   function notifyStart() {
-    // Delay slightly to allow YouTube SPA to finish DOM title updates on new video load
+    const targetVid = getVideoId(location.href);
+    if (!targetVid) return;
+    currentTrackingVid = targetVid;
+
+    // Send immediate/slightly delayed notification
     setTimeout(() => {
-      const title = getTitle() || "YouTube Video";
+      if (getVideoId(location.href) !== targetVid) return;
+      const currentUrl = location.href;
+      const initialTitle = getTitle() || (currentUrl.includes("/shorts/") ? "YouTube Short" : "YouTube Video");
+      
       safeSendMessage({
         type: "WATCH_START",
-        url: location.href,
-        title: title
+        url: currentUrl,
+        title: initialTitle
       });
-    }, 1200);
+
+      // If title was a placeholder, retry progressively as YouTube SPA renders the DOM
+      if (initialTitle === "YouTube Short" || initialTitle === "YouTube Video") {
+        const retryDelays = [600, 1400, 2600];
+        retryDelays.forEach((delay) => {
+          setTimeout(() => {
+            if (getVideoId(location.href) === targetVid) {
+              const updatedTitle = getTitle();
+              if (updatedTitle && updatedTitle !== "YouTube Short" && updatedTitle !== "YouTube Video") {
+                safeSendMessage({
+                  type: "WATCH_START",
+                  url: location.href,
+                  title: updatedTitle
+                });
+              }
+            }
+          }, delay);
+        });
+      }
+    }, 400);
   }
 
   function notifyStop() {
@@ -123,7 +222,7 @@ if (location.hostname.includes("youtube.com")) {
 
   // Initial detection
   if (isWatchOrShorts(location.href)) {
-    setTimeout(notifyStart, 1500);
+    setTimeout(notifyStart, 1000);
   }
 
   // Watch for HTML5 video element play / pause events directly
@@ -153,6 +252,17 @@ if (location.hostname.includes("youtube.com")) {
     checkUrlChange();
     attachVideoListeners();
   }, 1000);
+
+  // Native YouTube SPA navigation event listeners
+  window.addEventListener("yt-navigate-finish", () => {
+    checkUrlChange();
+  });
+  window.addEventListener("yt-page-data-updated", () => {
+    checkUrlChange();
+  });
+  window.addEventListener("popstate", () => {
+    checkUrlChange();
+  });
 
   // Watch for visibility changes
   document.addEventListener("visibilitychange", () => {
