@@ -1,34 +1,34 @@
-# 🧠 Ethos — Behavioral Telemetry & Personality Intelligence
+# Ethos — Behavioral Telemetry & Personality Intelligence
 
 > **What does your digital footprint say about you?**  
 > Ethos transforms passive YouTube watch history into deep, actionable personality insights using Gemini AI content analysis and Big Five (OCEAN) machine learning models.
 
 ---
 
-## ✨ Overview
+## Overview
 
 Ethos explores a simple yet profound question: *Can your everyday media consumption reveal who you are?*
 
 By analyzing video watch patterns, content topics, time-of-day habits, and topic diversity, Ethos generates a real-time behavioral profile mapped to the **Big Five Personality Model (OCEAN)**:
-- 🎨 **Openness to Experience** — Curiosity, topic diversity & intellectual exploration
-- 🎯 **Conscientiousness** — Routine regularity, activity consistency & educational focus
-- ⚡ **Extraversion** — High-energy, social & dynamic content preference
-- 🤝 **Agreeableness** — Positive tone & collaborative sentiment preference
-- 🌊 **Neuroticism** — Mood variance & late-night watch habits
+- **Openness to Experience** — Curiosity, topic diversity & intellectual exploration
+- **Conscientiousness** — Routine regularity, activity consistency & educational focus
+- **Extraversion** — High-energy, social & dynamic content preference
+- **Agreeableness** — Positive tone & collaborative sentiment preference
+- **Neuroticism** — Mood variance & late-night watch habits
 
 ---
 
-## 🔒 Privacy & Explicit User Consent
+## Privacy & Explicit User Consent
 
 Ethos is built on a **Privacy-by-Design** foundation. Your behavioral telemetry belongs strictly to you.
 
-- 🛡️ **Explicit Opt-In Gateway**: Telemetry collection remains 100% inactive until you review and grant explicit consent via the interactive Consent screen.
-- 🎛️ **Total User Control**: Withdraw consent or permanently delete all your stored watch history, behavioral features, and personality predictions at any time with a single click.
-- 🔐 **Secure & Transparent**: Built with JWT authentication, strict CORS origins, and automatic multi-tier fallback storage (including local FileStore JSON) so your data stays resilient and protected.
+- **Explicit Opt-In Gateway**: Telemetry collection remains 100% inactive until you review and grant explicit consent via the interactive Consent screen.
+- **Total User Control**: Withdraw consent or permanently delete all your stored watch history, behavioral features, and personality predictions at any time with a single click.
+- **Secure & Transparent**: Built with JWT authentication, strict CORS origins, and automatic multi-tier fallback storage (including local FileStore JSON) so your data stays resilient and protected.
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 Ethos combines modern web technologies, dual-engine backend servers, and machine learning into an agile, highly resilient ecosystem:
 
@@ -39,12 +39,12 @@ Ethos combines modern web technologies, dual-engine backend servers, and machine
 | **Backend (Python)** | FastAPI, Pydantic, Motor (Async MongoDB Driver), Uvicorn |
 | **AI & Semantic Engine** | Google Gemini API (`@google/genai`) for video topic & user intent classification |
 | **Machine Learning** | Python, Scikit-learn (MultiOutput ElasticNet), NumPy, Pandas |
-| **Database Architecture** | Multi-tier setup: MongoDB Atlas (Primary) ➔ Firebase Firestore (Fallback) ➔ Local FileStore JSON (Guaranteed Uptime) |
+| **Database Architecture** | Multi-tier setup: MongoDB Atlas (Primary) -> Firebase Firestore (Fallback) -> Local FileStore JSON (Guaranteed Uptime) |
 | **Telemetry Capture** | Chrome Extension (Manifest V3) for passive, non-intrusive event capture |
 
 ---
 
-## 🤖 Machine Learning Engine
+## Machine Learning Engine
 
 The Ethos personality engine bridges daily digital habits with psychological ground truth derived from the **BFI-44 (Big Five Inventory)** questionnaire:
 
@@ -59,7 +59,7 @@ The Ethos personality engine bridges daily digital habits with psychological gro
 
 ---
 
-## 🚀 Quickstart & Setup
+## Quickstart & Setup
 
 ### Prerequisites
 - **Node.js 20+** & **npm**
@@ -96,7 +96,7 @@ npm run dev
 
 ---
 
-## 💡 Scientific Credit & Inspiration
+## Scientific Credit & Inspiration
 
 Ethos is inspired by the pioneering psychometric research of **Dr. Michal Kosinski** (alongside David Stillwell & Thore Graepel), whose landmark Cambridge and Stanford studies proved that digital footprints—such as social media activity and web browsing logs—can accurately predict core human personality traits.
 
@@ -104,7 +104,7 @@ Ethos builds upon this foundational insight, expanding static digital footprint 
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 Ethos/
@@ -120,6 +120,6 @@ Ethos/
 
 ---
 
-## 📄 License & Acknowledgments
+## License & Acknowledgments
 
 Developed as a Major Capstone Project at **CMR Institute of Technology (CMRIT)**.
