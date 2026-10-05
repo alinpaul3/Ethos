@@ -122,4 +122,4 @@ Ethos/
 
 ## License & Acknowledgments
 
-Developed as a Major Capstone Project at **CMR Institute of Technology (CMRIT)**.
+Developed as a Major Capstone Project at **CMR Institute of Technology (CMRIT), Bangalore**.
