@@ -22,11 +22,11 @@ def print_evaluation_table(results: Dict[str, Any], title: str = "REAL-DATA MODE
     """
     Prints a formatted evaluation table from an evaluation metrics dictionary.
     """
-    print("\n" + "=" * 90)
+    print("\n" + "=" * 108)
     print(f"       {title}")
-    print("=" * 90)
-    print(f"{'Trait':<18} | {'MAE':<8} | {'RMSE':<8} | {'MSE':<8} | {'R² Score':<9} | {'Tolerance Acc (±0.5)':<20}")
-    print("-" * 90)
+    print("=" * 108)
+    print(f"{'Trait':<18} | {'MAE':<8} | {'RMSE':<8} | {'MSE':<8} | {'R² Score':<9} | {'Tolerance (±0.5)':<18} | {'Scale Accuracy':<14}")
+    print("-" * 108)
 
     for name, metrics in results.items():
         if name == "overall_average":
@@ -36,7 +36,8 @@ def print_evaluation_table(results: Dict[str, Any], title: str = "REAL-DATA MODE
         mse = metrics.get("mse", 0.0)
         r2 = metrics.get("r2", 0.0)
         tol_acc = metrics.get("tolerance_accuracy_pct", 0.0)
-        print(f"{name.capitalize():<18} | {mae:<8.4f} | {rmse:<8.4f} | {mse:<8.4f} | {r2:<9.4f} | {tol_acc:>18.2f}%")
+        scale_acc = metrics.get("normalized_scale_accuracy_pct", (1.0 - (mae / 4.0)) * 100.0)
+        print(f"{name.capitalize():<18} | {mae:<8.4f} | {rmse:<8.4f} | {mse:<8.4f} | {r2:<9.4f} | {tol_acc:>16.2f}% | {scale_acc:>12.2f}%")
 
     if "overall_average" in results:
         avg = results["overall_average"]
@@ -45,9 +46,10 @@ def print_evaluation_table(results: Dict[str, Any], title: str = "REAL-DATA MODE
         avg_mse = avg.get("mse", 0.0)
         avg_r2 = avg.get("r2", 0.0)
         avg_tol = avg.get("tolerance_accuracy_pct", 0.0)
-        print("-" * 90)
-        print(f"{'OVERALL AVERAGE':<18} | {avg_mae:<8.4f} | {avg_rmse:<8.4f} | {avg_mse:<8.4f} | {avg_r2:<9.4f} | {avg_tol:>18.2f}%")
-    print("=" * 90 + "\n")
+        avg_scale = avg.get("normalized_scale_accuracy_pct", (1.0 - (avg_mae / 4.0)) * 100.0)
+        print("-" * 108)
+        print(f"{'OVERALL AVERAGE':<18} | {avg_mae:<8.4f} | {avg_rmse:<8.4f} | {avg_mse:<8.4f} | {avg_r2:<9.4f} | {avg_tol:>16.2f}% | {avg_scale:>12.2f}%")
+    print("=" * 108 + "\n")
 
 
 def evaluate_ocean_predictions(

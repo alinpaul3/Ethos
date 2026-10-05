@@ -52,10 +52,6 @@ Thumbs.db
 
 # Local Audit, Temporary & Diagnostic Files
 audit_*.py
-ARCHITECTURE_AUDIT.txt
-AUDIT_COMPLETION_SUMMARY.txt
-FINAL_AUDIT_REPORT.*
-TRIGGER_AUDIT_FINAL_REPORT.txt
+docs/audit_reports/
 flow_diagram.py
 powershell.cmd
-{

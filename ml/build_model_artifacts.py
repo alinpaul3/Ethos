@@ -59,5 +59,9 @@ def build_synthetic_benchmark_artifacts(output_dir: str = None):
     return scaler_path, model_path
 
 
+# Backward compatibility alias
+build_and_save_artifacts = build_synthetic_benchmark_artifacts
+
 if __name__ == "__main__":
     build_synthetic_benchmark_artifacts()
+

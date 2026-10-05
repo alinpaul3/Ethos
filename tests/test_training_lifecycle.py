@@ -328,5 +328,68 @@ class TestSafeCandidateTrainingAndPromotion(unittest.TestCase):
             self.assertEqual(bf.read(), "PROD_MODEL_INITIAL_V1")
 
 
+class TestModelRegistryAndInterchangeability(unittest.TestCase):
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.csv_path = os.path.join(self.test_dir, "training_dataset.csv")
+        rows = [
+            {"user_id": f"real_user_{i}", "avg_session_duration": 30.0 + i * 5, "late_night_ratio": 0.05 * i,
+             "topic_diversity": 0.4 + 0.05 * i, "learning_ratio": 0.3 + 0.05 * i, "activity_consistency": 0.7,
+             "openness": 3.0 + 0.1 * i, "conscientiousness": 3.5, "extraversion": 3.2, "agreeableness": 4.0, "neuroticism": 2.2}
+            for i in range(8)
+        ]
+        pd.DataFrame(rows).to_csv(self.csv_path, index=False)
+
+    def test_model_registry_instantiates_all_supported_models(self):
+        from ml.model import list_supported_models, get_model, get_model_metadata
+
+        supported = list_supported_models()
+        self.assertIn("elasticnet", supported)
+        self.assertIn("random_forest", supported)
+        self.assertIn("ridge", supported)
+        self.assertIn("svr", supported)
+        self.assertIn("mlp", supported)
+
+        for m_name in supported:
+            model = get_model(m_name)
+            self.assertTrue(hasattr(model, "fit"), f"Model {m_name} must implement fit()")
+            self.assertTrue(hasattr(model, "predict"), f"Model {m_name} must implement predict()")
+
+            meta = get_model_metadata(m_name)
+            self.assertEqual(meta["model_type"], m_name)
+            self.assertIn("description", meta)
+
+    def test_switching_model_type_in_candidate_pipeline(self):
+        from ml.model import get_model_metadata
+
+        # 1. Train ElasticNet candidate
+        res_enet = train_candidate_pipeline(csv_path=self.csv_path, output_dir=self.test_dir, model_type="elasticnet")
+        self.assertEqual(res_enet["model_type"], "elasticnet")
+        cand_metrics_path = os.path.join(self.test_dir, "candidate_evaluation_metrics.json")
+        with open(cand_metrics_path, "r") as f:
+            metrics_enet = json.load(f)
+        self.assertEqual(metrics_enet["model_type"], "elasticnet")
+
+        # 2. Switch to Random Forest without pipeline rewrite
+        res_rf = train_candidate_pipeline(csv_path=self.csv_path, output_dir=self.test_dir, model_type="random_forest")
+        self.assertEqual(res_rf["model_type"], "random_forest")
+        with open(cand_metrics_path, "r") as f:
+            metrics_rf = json.load(f)
+        self.assertEqual(metrics_rf["model_type"], "random_forest")
+
+        # 3. Switch to Ridge
+        res_ridge = train_candidate_pipeline(csv_path=self.csv_path, output_dir=self.test_dir, model_type="ridge")
+        self.assertEqual(res_ridge["model_type"], "ridge")
+
+        # 4. Switch to SVR
+        res_svr = train_candidate_pipeline(csv_path=self.csv_path, output_dir=self.test_dir, model_type="svr")
+        self.assertEqual(res_svr["model_type"], "svr")
+
+        # 5. Switch to MLP baseline
+        res_mlp = train_candidate_pipeline(csv_path=self.csv_path, output_dir=self.test_dir, model_type="mlp")
+        self.assertEqual(res_mlp["model_type"], "mlp")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
